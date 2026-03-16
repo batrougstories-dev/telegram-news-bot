@@ -8,7 +8,7 @@
 ║  ✅ أخبار الساعة الأخيرة فقط (طازجة)                            ║
 ║  ✅ كشف التكرار بالذكاء الاصطناعي                               ║
 ║  ✅ ترجمة احترافية                                              ║
-║  ✅ مقالَي تحليل سياسي يومياً مع ذكر الكاتب                    ║
+║                                                                  ║
 ║  ✅ تصنيف الأخبار + تقييم الأهمية                              ║
 ║  ✅ الشرق الأوسط أولاً                                         ║
 ║  ✅ Self-ping لمنع نوم Render                                   ║
@@ -39,12 +39,10 @@ DB_FILE      = "news_bot.db"
 PORT         = int(os.environ.get("PORT", 10000))
 
 NEWS_MAX_AGE_MINUTES   = 60    # ← أخبار آخر ساعة فقط
-ANALYSIS_PER_DAY       = 2     # ← مقالَي تحليل فقط يومياً
 MAX_PER_BREAKING       = 3
 MAX_PER_REGULAR        = 1
 BREAKING_EVERY         = 3     # دقائق
 REGULAR_EVERY          = 15    # دقائق
-ANALYSIS_EVERY         = 120   # دقائق (مرتين في اليوم تقريباً)
 PING_EVERY             = 5     # دقائق
 
 # ══════════════════════════════════════════════
@@ -69,12 +67,6 @@ BREAKING_KEYWORDS = [
     "strike","bomb","missile","assassination","coup","crisis",
     "casualties","dead","fire","arrested","collapsed","disaster",
 ]
-ANALYSIS_KEYWORDS = [
-    "analysis","opinion","commentary","perspective","column","essay",
-    "viewpoint","explainer","why","how","what","deep dive","in depth",
-    "background","context","explained","the big picture",
-]
-
 # ══════════════════════════════════════════════
 #   📰 مصادر الأخبار العاجلة RSS
 # ══════════════════════════════════════════════
@@ -101,24 +93,6 @@ NEWS_SOURCES = [
      "rss":"https://www.theguardian.com/world/middleeast/rss"},
     {"name":"Reuters — World",        "priority":"normal",
      "rss":"https://news.google.com/rss/search?q=reuters+breaking+news&hl=en-US&gl=US&ceid=US:en"},
-]
-
-# ══════════════════════════════════════════════
-#   📝 مصادر التحليل السياسي
-# ══════════════════════════════════════════════
-ANALYSIS_SOURCES = [
-    {"name":"Foreign Affairs",
-     "rss":"https://www.foreignaffairs.com/rss.xml"},
-    {"name":"The Guardian — تحليل",
-     "rss":"https://www.theguardian.com/commentisfree/rss"},
-    {"name":"Atlantic Council",
-     "rss":"https://www.atlanticcouncil.org/feed/"},
-    {"name":"Al Monitor",
-     "rss":"https://www.al-monitor.com/rss"},
-    {"name":"Reuters — تحليل",
-     "rss":"https://news.google.com/rss/search?q=reuters+analysis+middle+east&hl=en-US&gl=US&ceid=US:en"},
-    {"name":"Bloomberg — رأي",
-     "rss":"https://news.google.com/rss/search?q=bloomberg+opinion+middle+east&hl=en-US&gl=US&ceid=US:en"},
 ]
 
 # ══════════════════════════════════════════════
@@ -220,14 +194,6 @@ def get_recent_titles(hours=48):
     ).fetchall()
     conn.close()
     return [r[0] for r in rows if r[0]]
-
-def count_analysis_today():
-    """عدد مقالات التحليل المرسلة اليوم"""
-    conn = sqlite3.connect(DB_FILE)
-    n    = conn.execute(
-        "SELECT COUNT(*) FROM sent_news WHERE is_analysis=1 AND sent_at > datetime('now','start of day')"
-    ).fetchone()[0]
-    conn.close(); return n
 
 def save_news(url, title_en, title_ar, category, importance,
               is_breaking, is_analysis, source):
@@ -341,31 +307,6 @@ def ai_analyze_news(title_en: str, source: str, recent: list) -> dict:
     return {"is_duplicate":False,"is_middle_east":me,"is_breaking":brk,
             "category":"other","importance":6,"title_ar":ar}
 
-def ai_analyze_article(title_en: str, summary_en: str,
-                       author: str, source: str) -> dict:
-    """يحلل مقال تحليلي ويلخصه"""
-    system = "أنت محرر أخبار عربي متخصص في التحليل السياسي. أجب بـ JSON فقط."
-    user = f"""حلل هذا المقال التحليلي:
-العنوان: {title_en}
-الكاتب: {author or 'غير محدد'}
-المصدر: {source}
-المحتوى المتاح: {summary_en[:600] if summary_en else 'غير متوفر'}
-
-{{
-  "is_middle_east": true,
-  "title_ar": "العنوان بالعربية",
-  "author_ar": "اسم الكاتب أو 'غير محدد'",
-  "summary_ar": "ملخص عربي مختصر بـ 2-3 جمل فقط عن محور المقال وأبرز حججه",
-  "importance": 7
-}}"""
-    res = call_ai(system, user, max_tokens=350)
-    if res:
-        return res
-    ar = force_translate(title_en)
-    return {"is_middle_east":True,"title_ar":ar,
-            "author_ar":author or "غير محدد",
-            "summary_ar":"تحليل سياسي","importance":6}
-
 # ══════════════════════════════════════════════
 #        🌐 جلب الأخبار
 # ══════════════════════════════════════════════
@@ -402,34 +343,6 @@ def fetch_news() -> list:
             logging.warning(f"⚠️ RSS {src['name']}: {ex}")
     return items
 
-def fetch_analysis() -> list:
-    """يجلب مقالات التحليل (آخر 24 ساعة)"""
-    items   = []
-    headers = {"User-Agent":"Mozilla/5.0"}
-    for src in ANALYSIS_SOURCES:
-        try:
-            r    = requests.get(src["rss"], headers=headers, timeout=12)
-            feed = feedparser.parse(r.content)
-            for e in feed.entries[:10]:
-                url     = getattr(e,"link","")
-                title   = clean(getattr(e,"title",""))
-                summary = clean(getattr(e,"summary","") or getattr(e,"description",""))
-                author  = getattr(e,"author","") or getattr(e,"dc_creator","")
-                if not url or not title or is_url_sent(url):
-                    continue
-                if not is_fresh_analysis(e):   # آخر 24 ساعة
-                    continue
-                items.append({
-                    "url":        url,
-                    "title_en":   title,
-                    "summary_en": summary,
-                    "author":     clean(author),
-                    "source":     src["name"],
-                })
-        except Exception as ex:
-            logging.warning(f"⚠️ Analysis {src['name']}: {ex}")
-    return items
-
 # ══════════════════════════════════════════════
 #    🧹 فلتر أولي سريع (يوفر استهلاك AI)
 # ══════════════════════════════════════════════
@@ -464,14 +377,6 @@ def format_news(title_ar, source, category, is_breaking) -> str:
     if is_breaking:
         return f"🔴 <b>عاجل</b> {emoji}\n\n<b>{title_ar}</b>\n\n— {source}"
     return f"{emoji} <b>{title_ar}</b>\n\n— {source}"
-
-def format_analysis(title_ar, author_ar, summary_ar, source) -> str:
-    return (
-        f"📌 <b>تحليل سياسي</b>\n\n"
-        f"<b>{title_ar}</b>\n\n"
-        f"{summary_ar}\n\n"
-        f"✍️ {author_ar} | {source}"
-    )
 
 async def send_to_all(message: str):
     chats = get_chats()
@@ -578,52 +483,6 @@ def regular_cycle():
         logging.error(f"❌ regular_cycle: {e}")
 
 # ══════════════════════════════════════════════
-#   📝 دورة التحليل السياسي (مرتين يومياً)
-# ══════════════════════════════════════════════
-def analysis_cycle():
-    try:
-        today_count = count_analysis_today()
-        if today_count >= ANALYSIS_PER_DAY:
-            logging.info(f"📌 [تحليل] اكتمل الحد اليومي ({today_count}/{ANALYSIS_PER_DAY})")
-            return
-
-        logging.info(f"📌 [تحليل] فحص المقالات... ({today_count}/{ANALYSIS_PER_DAY} اليوم)")
-        articles = fetch_analysis()
-        if not articles:
-            logging.info("   ℹ️ لا مقالات جديدة")
-            return
-
-        remaining = ANALYSIS_PER_DAY - today_count
-        sent = 0
-
-        for art in articles:
-            if sent >= remaining: break
-            a = ai_analyze_article(
-                art["title_en"], art["summary_en"],
-                art["author"],   art["source"]
-            )
-            if not a.get("is_middle_east"):
-                logging.info(f"   ⏭️ غير متعلق بالشرق الأوسط: {art['title_en'][:45]}")
-                continue
-
-            title_ar  = ensure_arabic(a.get("title_ar",""), art["title_en"])
-            author_ar = a.get("author_ar", art["author"] or "غير محدد")
-            summary_ar= a.get("summary_ar","")
-            importance= a.get("importance",6)
-
-            msg = format_analysis(title_ar, author_ar, summary_ar, art["source"])
-            asyncio.run(send_to_all(msg))
-            save_news(art["url"],art["title_en"],title_ar,
-                      "analysis",importance,0,1,art["source"])
-            logging.info(f"   ✅ تحليل: {title_ar[:55]}")
-            sent += 1
-            time.sleep(2)
-
-        if sent == 0:
-            logging.info("   ℹ️ لا مقالات مؤهلة عن الشرق الأوسط")
-
-    except Exception as e:
-        logging.error(f"❌ analysis_cycle: {e}")
 
 # ══════════════════════════════════════════════
 #   🔄 Self-Ping
@@ -652,7 +511,6 @@ async def on_status_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "🤖 <b>بوت أخبار الشرق الأوسط — مدعوم بالذكاء الاصطناعي</b>\n\n"
                     "• أخبار طازجة من آخر ساعة فقط\n"
                     "• أخبار عاجلة فور حدوثها\n"
-                    "• مقالَي تحليل سياسي يومياً\n"
                     "• ترجمة احترافية بلا تكرار"
                 ),
             )
@@ -700,15 +558,10 @@ def home():
     conn  = sqlite3.connect(DB_FILE)
     total    = conn.execute("SELECT COUNT(*) FROM sent_news").fetchone()[0]
     breaking = conn.execute("SELECT COUNT(*) FROM sent_news WHERE is_breaking=1").fetchone()[0]
-    analysis = conn.execute("SELECT COUNT(*) FROM sent_news WHERE is_analysis=1").fetchone()[0]
-    today_a  = conn.execute(
-        "SELECT COUNT(*) FROM sent_news WHERE is_analysis=1 AND sent_at>datetime('now','start of day')"
-    ).fetchone()[0]
     conn.close()
     return (
         f"✅ بوت الأخبار | القنوات: {len(chats)} | "
-        f"إجمالي: {total} | عاجلة: {breaking} | "
-        f"تحليلات: {analysis} (اليوم: {today_a}/{ANALYSIS_PER_DAY})"
+        f"إجمالي: {total} | عاجلة: {breaking}"
     ), 200
 
 @flask_app.route("/health")
@@ -720,9 +573,7 @@ def stats():
     conn = sqlite3.connect(DB_FILE)
     total    = conn.execute("SELECT COUNT(*) FROM sent_news").fetchone()[0]
     breaking = conn.execute("SELECT COUNT(*) FROM sent_news WHERE is_breaking=1").fetchone()[0]
-    analysis = conn.execute("SELECT COUNT(*) FROM sent_news WHERE is_analysis=1").fetchone()[0]
     today_a  = conn.execute(
-        "SELECT COUNT(*) FROM sent_news WHERE is_analysis=1 AND sent_at>datetime('now','start of day')"
     ).fetchone()[0]
     by_cat   = conn.execute(
         "SELECT category,COUNT(*) FROM sent_news GROUP BY category ORDER BY 2 DESC"
@@ -733,7 +584,6 @@ def stats():
     conn.close()
     return json.dumps({
         "total": total, "breaking": breaking,
-        "analysis": analysis, "analysis_today": f"{today_a}/{ANALYSIS_PER_DAY}",
         "by_category": dict(by_cat),
         "top_sources":  dict(by_src),
     }, ensure_ascii=False, indent=2), 200
@@ -756,7 +606,6 @@ logging.info("  🤖 بوت أخبار الشرق الأوسط — GitHub AI")
 logging.info("═" * 55)
 logging.info(f"  🧠 النموذج     : {AI_MODEL}")
 logging.info(f"  ⏰ أخبار آخر   : {NEWS_MAX_AGE_MINUTES} دقيقة فقط")
-logging.info(f"  📌 تحليلات/يوم : {ANALYSIS_PER_DAY}")
 logging.info(f"  📋 القنوات     : {len(chats)}")
 for cid, t in chats:
     logging.info(f"     • {t} ({cid})")
@@ -765,13 +614,11 @@ logging.info("═" * 55)
 # أول تشغيل
 logging.info("▶️ الدورة الأولى...")
 breaking_cycle()
-analysis_cycle()
 
 # جدولة
 scheduler = BackgroundScheduler(timezone="Asia/Riyadh")
 scheduler.add_job(breaking_cycle, "interval", minutes=BREAKING_EVERY,  id="breaking")
 scheduler.add_job(regular_cycle,  "interval", minutes=REGULAR_EVERY,   id="regular")
-scheduler.add_job(analysis_cycle, "interval", minutes=ANALYSIS_EVERY,  id="analysis")
 scheduler.add_job(self_ping,      "interval", minutes=PING_EVERY,       id="ping")
 scheduler.start()
 logging.info("⏰ الجدول يعمل")
