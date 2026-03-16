@@ -15,6 +15,7 @@
 """
 
 import asyncio
+from difflib import SequenceMatcher
 import feedparser
 import sqlite3
 import logging
@@ -168,11 +169,12 @@ def init_database():
     conn = sqlite3.connect(DB_FILE)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sent_news (
-            news_url  TEXT UNIQUE NOT NULL,
-            title_ar  TEXT,
-            source    TEXT,
+            news_url    TEXT UNIQUE NOT NULL,
+            title_en    TEXT,
+            title_ar    TEXT,
+            source      TEXT,
             is_breaking INTEGER DEFAULT 0,
-            sent_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            sent_at     DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("""
@@ -220,12 +222,54 @@ def is_sent(url: str) -> bool:
     conn.close()
     return r is not None
 
-def mark_sent(url, title_ar, source, is_breaking=0):
+def normalize_title(title: str) -> str:
+    """تطبيع العنوان لمقارنة أدق"""
+    stop  = {"the","a","an","in","on","at","to","for","of","and","or",
+              "is","are","was","were","says","say","new","has","have","by",
+              "with","its","over","after","into","as","up","but","from","about"}
+    words = re.sub(r"[^\w\s]","",title.lower()).split()
+    return " ".join(sorted(w for w in words if w not in stop and len(w) > 2))
+
+def jaccard_sim(a: str, b: str) -> float:
+    """تشابه Jaccard بين كلمات العنوانين"""
+    stop  = {"the","a","an","in","on","at","to","for","of","and","or",
+              "is","are","was","were","says","say","new","has","have","by",
+              "with","its","over","after","into","as","up","but","from","about"}
+    def words(t):
+        return set(w for w in re.sub(r"[^\w\s]","",t.lower()).split()
+                   if w not in stop and len(w) > 2)
+    ka, kb = words(a), words(b)
+    if not ka or not kb: return 0.0
+    return len(ka & kb) / len(ka | kb)
+
+def seq_sim(a: str, b: str) -> float:
+    """تشابه SequenceMatcher بين العنوانين المطبّعين"""
+    na, nb = normalize_title(a), normalize_title(b)
+    return SequenceMatcher(None, na, nb).ratio()
+
+def is_duplicate_title(title_en: str, hours: int = 24) -> bool:
+    """يكشف إذا كان الخبر مكرراً بمقارنة العناوين الإنجليزية — دقة عالية"""
+    conn    = sqlite3.connect(DB_FILE)
+    recent  = conn.execute(
+        "SELECT title_en FROM sent_news WHERE sent_at > datetime('now', '-' || ? || ' hours')",
+        (str(hours),)
+    ).fetchall()
+    conn.close()
+    for (sent_en,) in recent:
+        if not sent_en:
+            continue
+        if jaccard_sim(title_en, sent_en) >= 0.40:
+            return True
+        if seq_sim(title_en, sent_en) >= 0.65:
+            return True
+    return False
+
+def mark_sent(url, title_en, title_ar, source, is_breaking=0):
     conn = sqlite3.connect(DB_FILE)
     try:
         conn.execute(
-            "INSERT INTO sent_news VALUES (?,?,?,?,CURRENT_TIMESTAMP)",
-            (url, title_ar, source, is_breaking)
+            "INSERT INTO sent_news VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)",
+            (url, title_en, title_ar, source, is_breaking)
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -392,7 +436,7 @@ async def broadcast(news_items: list):
                         remove_chat(chat_id)
                 await asyncio.sleep(0.5)
 
-            mark_sent(news["url"], title_ar, news["source"], int(news["is_breaking"]))
+            mark_sent(news["url"], news["title"], title_ar, news["source"], int(news["is_breaking"]))
             tag = "🔴 عاجل" if news["is_breaking"] else "📰"
             logging.info(f"{tag} {title_ar[:65]}")
             await asyncio.sleep(2)
