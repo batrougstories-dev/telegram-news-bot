@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-═══════════════════════════════════════════════════════════════
-        بوت أخبار عاجلة - Telegram Breaking News Bot
-═══════════════════════════════════════════════════════════════
-   المصادر: Reuters | AP | BBC | Al Jazeera | Guardian | Axios
-   الترجمة: Google Translate (مجاني)
-   الإرسال: لكل القنوات والمجموعات تلقائياً
-═══════════════════════════════════════════════════════════════
+بوت أخبار عاجلة مترجمة لتليجرام
 """
 
 import asyncio
@@ -17,6 +11,7 @@ import logging
 import re
 import html
 import threading
+import os
 from flask import Flask
 from deep_translator import GoogleTranslator
 import requests
@@ -29,19 +24,19 @@ from telegram.ext import Application, ChatMemberHandler, ContextTypes
 #           ⚙️ الإعدادات
 # ═══════════════════════════════════════
 BOT_TOKEN        = "8638837552:AAH4bOAipi9ipV336iYHblL-sMKh91WrD1M"
-CHECK_EVERY      = 10    # دقائق
+CHECK_EVERY      = 10
 MAX_NEWS_PER_RUN = 1
 DB_FILE          = "news_bot.db"
-PORT             = 8080
+PORT             = int(os.environ.get("PORT", 10000))
 
 # ═══════════════════════════════════════
-#   🌐 Flask Server (لـ Render Web Service)
+#   🌐 Flask Server
 # ═══════════════════════════════════════
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "✅ بوت الأخبار العاجلة يعمل", 200
+    return "bot is running", 200
 
 @flask_app.route("/health")
 def health():
@@ -133,7 +128,6 @@ async def on_bot_status_change(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     chat   = result.chat
     status = result.new_chat_member.status
-
     if status in ("administrator", "member"):
         add_chat(chat.id, chat.title or "بدون اسم", chat.type)
         try:
@@ -158,7 +152,7 @@ def clean_text(t):
 
 def fetch_rss(source):
     items   = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         r    = requests.get(source["rss"], headers=headers, timeout=15)
         feed = feedparser.parse(r.content)
@@ -185,9 +179,6 @@ def translate(text):
         logging.warning(f"⚠️ ترجمة: {ex}")
         return text
 
-# ═══════════════════════════════════════
-#    📢 تنسيق الرسالة
-# ═══════════════════════════════════════
 def format_message(title_ar, source):
     return f"<b>{title_ar}</b>\n\n— {source}"
 
@@ -209,14 +200,10 @@ async def fetch_and_send(bot: Bot):
         logging.info("ℹ️  لا أخبار جديدة")
         return
 
-    logging.info(f"📊 جديد: {len(all_news)} — يُرسل: {min(len(all_news), MAX_NEWS_PER_RUN)}")
-
-    sent = 0
     for news in all_news[:MAX_NEWS_PER_RUN]:
         try:
             title_ar = translate(news["title"])
             msg      = format_message(title_ar, news["source"])
-
             for chat_id, chat_title in chats:
                 try:
                     await bot.send_message(
@@ -225,36 +212,28 @@ async def fetch_and_send(bot: Bot):
                         parse_mode               = ParseMode.HTML,
                         disable_web_page_preview = True
                     )
-                    logging.info(f"   ✅ → {chat_title}")
+                    logging.info(f"✅ → {chat_title}")
                 except TelegramError as te:
-                    logging.error(f"   ❌ → {chat_title}: {te}")
+                    logging.error(f"❌ → {chat_title}: {te}")
                     if any(x in str(te).lower() for x in ["kicked", "chat not found", "blocked"]):
                         remove_chat(chat_id)
                 await asyncio.sleep(1)
-
             mark_sent(news["url"], title_ar, news["source"])
-            sent += 1
-            logging.info(f"✅ [{sent}] {title_ar[:60]}")
+            logging.info(f"📰 {title_ar[:60]}")
             await asyncio.sleep(2)
-
         except Exception as e:
             logging.error(f"❌ {e}")
-
-    logging.info(f"🎉 أُرسل {sent} خبر")
 
 # ═══════════════════════════════════════
 #    🚀 التشغيل
 # ═══════════════════════════════════════
 async def main():
     logging.basicConfig(
-        level    = logging.INFO,
-        format   = "%(asctime)s | %(message)s",
-        datefmt  = "%H:%M:%S",
-        handlers = [logging.StreamHandler()]
+        level   = logging.INFO,
+        format  = "%(asctime)s | %(message)s",
+        datefmt = "%H:%M:%S"
     )
-    logging.info("═" * 45)
-    logging.info("  🚀 بوت الأخبار العاجلة يعمل")
-    logging.info("═" * 45)
+    logging.info("🚀 بوت الأخبار يعمل")
 
     init_database()
 
@@ -263,7 +242,6 @@ async def main():
 
     bot = Bot(token=BOT_TOKEN)
 
-    # اكتشاف القنوات الموجودة
     try:
         updates = await bot.get_updates(limit=100)
         for u in updates:
@@ -282,13 +260,9 @@ async def main():
     logging.info(f"📋 القنوات: {len(chats)}")
     for cid, title in chats:
         logging.info(f"   • {title} ({cid})")
-    logging.info(f"⏱️  خبر كل {CHECK_EVERY} دقيقة")
-    logging.info("═" * 45)
 
-    # أول دورة فوراً
     await fetch_and_send(bot)
 
-    # جدولة متكررة
     async def loop():
         while True:
             await asyncio.sleep(CHECK_EVERY * 60)
@@ -299,11 +273,11 @@ async def main():
         await app.updater.start_polling(drop_pending_updates=False)
         await loop()
 
-if __name__ == "__main__":
-    # تشغيل Flask في thread منفصل
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logging.info(f"🌐 Flask يعمل على port {PORT}")
 
-    # تشغيل البوت
+if __name__ == "__main__":
+    # Flask في thread منفصل
+    t = threading.Thread(target=run_flask, daemon=True)
+    t.start()
+    logging.info(f"🌐 Flask على port {PORT}")
+
     asyncio.run(main())
