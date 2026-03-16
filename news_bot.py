@@ -121,13 +121,29 @@ NEWS_SOURCES = [
     },
     {
         "name":     "Axios",
-        "priority": "normal",
+        "priority": "high",
         "rss":      "https://api.axios.com/feed/",
     },
     {
         "name":     "Reuters — World",
         "priority": "normal",
         "rss":      "https://news.google.com/rss/search?q=reuters+breaking+news&hl=en-US&gl=US&ceid=US:en",
+    },
+    # ── Bloomberg ──
+    {
+        "name":     "Bloomberg",
+        "priority": "high",
+        "rss":      "https://feeds.bloomberg.com/markets/news.rss",
+    },
+    {
+        "name":     "Bloomberg Politics",
+        "priority": "high",
+        "rss":      "https://feeds.bloomberg.com/politics/news.rss",
+    },
+    {
+        "name":     "Bloomberg — Middle East",
+        "priority": "high",
+        "rss":      "https://news.google.com/rss/search?q=bloomberg+middle+east&hl=en-US&gl=US&ceid=US:en",
     },
 ]
 
