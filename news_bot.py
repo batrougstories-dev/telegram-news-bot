@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 import requests
+from deep_translator import GoogleTranslator
 from telegram import Bot, Update
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
@@ -119,6 +120,41 @@ ANALYSIS_SOURCES = [
     {"name":"Bloomberg — رأي",
      "rss":"https://news.google.com/rss/search?q=bloomberg+opinion+middle+east&hl=en-US&gl=US&ceid=US:en"},
 ]
+
+# ══════════════════════════════════════════════
+#   🔤 ضمان الترجمة العربية دائماً
+# ══════════════════════════════════════════════
+_translator     = GoogleTranslator(source="en", target="ar")
+_translate_lock = threading.Lock()
+
+def is_arabic(text: str) -> bool:
+    """يتحقق أن النص عربي فعلاً"""
+    if not text: return False
+    arabic = sum(1 for c in text if "؀" <= c <= "ۿ")
+    return arabic > max(len(text) * 0.25, 3)
+
+def force_translate(text: str) -> str:
+    """يترجم النص بـ Google Translate كـ fallback موثوق"""
+    if not text: return text
+    with _translate_lock:
+        try:
+            result = _translator.translate(text[:500])
+            return result if result and is_arabic(result) else text
+        except Exception as e:
+            logging.warning(f"⚠️ translate fallback: {e}")
+            return text
+
+def ensure_arabic(text_ar: str, text_en: str) -> str:
+    """
+    يضمن أن النص المُرسل عربي دائماً:
+    1. إذا كان text_ar عربياً → استخدمه
+    2. إذا كان إنجليزياً → ترجم text_en بـ Google Translate
+    """
+    if is_arabic(text_ar):
+        return text_ar
+    # النص ليس عربياً → ترجم إجبارياً
+    logging.info("   🔄 ترجمة إجبارية (AI أرجع إنجليزي)")
+    return force_translate(text_en)
 
 # ══════════════════════════════════════════════
 #        🗂️ قاعدة البيانات
@@ -296,12 +332,14 @@ def ai_analyze_news(title_en: str, source: str, recent: list) -> dict:
     res = call_ai(system, user)
     if res:
         return res
-    # Fallback
-    tl  = title_en.lower()
-    me  = any(kw in tl for kw in ME_KEYWORDS)
-    brk = any(kw in tl for kw in BREAKING_KEYWORDS)
+    # Fallback: AI فشل → ترجم بـ Google Translate
+    logging.warning(f"⚠️ AI فشل → Google Translate: {title_en[:50]}")
+    tl    = title_en.lower()
+    me    = any(kw in tl for kw in ME_KEYWORDS)
+    brk   = any(kw in tl for kw in BREAKING_KEYWORDS)
+    ar    = force_translate(title_en)   # ← ترجمة موثوقة
     return {"is_duplicate":False,"is_middle_east":me,"is_breaking":brk,
-            "category":"other","importance":6,"title_ar":title_en}
+            "category":"other","importance":6,"title_ar":ar}
 
 def ai_analyze_article(title_en: str, summary_en: str,
                        author: str, source: str) -> dict:
@@ -323,7 +361,8 @@ def ai_analyze_article(title_en: str, summary_en: str,
     res = call_ai(system, user, max_tokens=350)
     if res:
         return res
-    return {"is_middle_east":True,"title_ar":title_en,
+    ar = force_translate(title_en)
+    return {"is_middle_east":True,"title_ar":ar,
             "author_ar":author or "غير محدد",
             "summary_ar":"تحليل سياسي","importance":6}
 
@@ -482,7 +521,7 @@ def breaking_cycle():
             if not a.get("is_breaking") and a.get("importance",0) < 8:
                 continue
 
-            title_ar   = a.get("title_ar", item["title_en"])
+            title_ar   = ensure_arabic(a.get("title_ar",""), item["title_en"])
             category   = a.get("category","other")
             importance = a.get("importance",5)
             is_breaking= a.get("is_breaking",False)
@@ -523,7 +562,7 @@ def regular_cycle():
             if not a.get("is_middle_east"):
                 continue
 
-            title_ar   = a.get("title_ar", item["title_en"])
+            title_ar   = ensure_arabic(a.get("title_ar",""), item["title_en"])
             category   = a.get("category","other")
             importance = a.get("importance",5)
             is_breaking= a.get("is_breaking",False)
@@ -567,7 +606,7 @@ def analysis_cycle():
                 logging.info(f"   ⏭️ غير متعلق بالشرق الأوسط: {art['title_en'][:45]}")
                 continue
 
-            title_ar  = a.get("title_ar",  art["title_en"])
+            title_ar  = ensure_arabic(a.get("title_ar",""), art["title_en"])
             author_ar = a.get("author_ar", art["author"] or "غير محدد")
             summary_ar= a.get("summary_ar","")
             importance= a.get("importance",6)
