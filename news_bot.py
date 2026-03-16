@@ -644,8 +644,6 @@ def stats():
     conn = sqlite3.connect(DB_FILE)
     total    = conn.execute("SELECT COUNT(*) FROM sent_news").fetchone()[0]
     breaking = conn.execute("SELECT COUNT(*) FROM sent_news WHERE is_breaking=1").fetchone()[0]
-    today_a  = conn.execute(
-    ).fetchone()[0]
     by_cat   = conn.execute(
         "SELECT category,COUNT(*) FROM sent_news GROUP BY category ORDER BY 2 DESC"
     ).fetchall()
