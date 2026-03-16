@@ -16,6 +16,8 @@ import sqlite3
 import logging
 import re
 import html
+import threading
+from flask import Flask
 from deep_translator import GoogleTranslator
 import requests
 from telegram import Bot, Update
@@ -30,6 +32,23 @@ BOT_TOKEN        = "8638837552:AAH4bOAipi9ipV336iYHblL-sMKh91WrD1M"
 CHECK_EVERY      = 10    # دقائق
 MAX_NEWS_PER_RUN = 1
 DB_FILE          = "news_bot.db"
+PORT             = 8080
+
+# ═══════════════════════════════════════
+#   🌐 Flask Server (لـ Render Web Service)
+# ═══════════════════════════════════════
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "✅ بوت الأخبار العاجلة يعمل", 200
+
+@flask_app.route("/health")
+def health():
+    return "OK", 200
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=PORT)
 
 # ═══════════════════════════════════════
 #        📰 مصادر الأخبار
@@ -231,10 +250,7 @@ async def main():
         level    = logging.INFO,
         format   = "%(asctime)s | %(message)s",
         datefmt  = "%H:%M:%S",
-        handlers = [
-            logging.FileHandler("bot.log", encoding="utf-8"),
-            logging.StreamHandler()
-        ]
+        handlers = [logging.StreamHandler()]
     )
     logging.info("═" * 45)
     logging.info("  🚀 بوت الأخبار العاجلة يعمل")
@@ -266,11 +282,13 @@ async def main():
     logging.info(f"📋 القنوات: {len(chats)}")
     for cid, title in chats:
         logging.info(f"   • {title} ({cid})")
-    logging.info(f"⏱️  كل {CHECK_EVERY} دقيقة")
+    logging.info(f"⏱️  خبر كل {CHECK_EVERY} دقيقة")
     logging.info("═" * 45)
 
+    # أول دورة فوراً
     await fetch_and_send(bot)
 
+    # جدولة متكررة
     async def loop():
         while True:
             await asyncio.sleep(CHECK_EVERY * 60)
@@ -282,4 +300,10 @@ async def main():
         await loop()
 
 if __name__ == "__main__":
+    # تشغيل Flask في thread منفصل
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logging.info(f"🌐 Flask يعمل على port {PORT}")
+
+    # تشغيل البوت
     asyncio.run(main())
