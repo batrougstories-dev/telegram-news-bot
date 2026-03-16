@@ -68,6 +68,27 @@ BREAKING_KEYWORDS = [
     "casualties","dead","fire","arrested","collapsed","disaster",
 ]
 # ══════════════════════════════════════════════
+#   💻 كلمات التقنية والذكاء الاصطناعي
+# ══════════════════════════════════════════════
+TECH_KEYWORDS = [
+    # الذكاء الاصطناعي
+    "artificial intelligence","machine learning","deep learning",
+    "chatgpt","gpt","gemini","claude","llama","copilot","sora","dall-e",
+    "openai","anthropic","deepmind","mistral","stable diffusion",
+    "large language model","llm","neural network","generative ai",
+    "ai model","ai chip","foundation model","transformer","diffusion",
+    # شركات التقنية الكبرى
+    "nvidia","microsoft","google","apple","meta","amazon","tesla",
+    "spacex","samsung","qualcomm","intel","amd","tsmc","arm",
+    "openai","anthropic","huawei","bytedance","tiktok","x corp",
+    # مواضيع تقنية
+    "smartphone","semiconductor","chip","quantum","cybersecurity",
+    "data breach","hack","robot","autonomous","self-driving",
+    "iphone","android","cloud computing","startup","ipo",
+    "silicon valley","big tech","tech giant","valuation",
+]
+
+# ══════════════════════════════════════════════
 #   📰 مصادر الأخبار العاجلة RSS
 # ══════════════════════════════════════════════
 NEWS_SOURCES = [
@@ -93,6 +114,20 @@ NEWS_SOURCES = [
      "rss":"https://www.theguardian.com/world/middleeast/rss"},
     {"name":"Reuters — World",        "priority":"normal",
      "rss":"https://news.google.com/rss/search?q=reuters+breaking+news&hl=en-US&gl=US&ceid=US:en"},
+]
+
+# ══════════════════════════════════════════════
+#   💻 مصادر أخبار التقنية والذكاء الاصطناعي
+# ══════════════════════════════════════════════
+TECH_SOURCES = [
+    {"name":"TechCrunch",      "rss":"https://techcrunch.com/feed/"},
+    {"name":"The Verge",       "rss":"https://www.theverge.com/rss/index.xml"},
+    {"name":"Ars Technica",    "rss":"https://feeds.arstechnica.com/arstechnica/index"},
+    {"name":"Wired",           "rss":"https://www.wired.com/feed/rss"},
+    {"name":"MIT Tech Review", "rss":"https://www.technologyreview.com/feed/"},
+    {"name":"VentureBeat",     "rss":"https://venturebeat.com/feed/"},
+    {"name":"Bloomberg Tech",  "rss":"https://feeds.bloomberg.com/technology/news.rss"},
+    {"name":"Reuters Tech",    "rss":"https://news.google.com/rss/search?q=reuters+technology+AI&hl=en-US&gl=US&ceid=US:en"},
 ]
 
 # ══════════════════════════════════════════════
@@ -292,9 +327,10 @@ def ai_analyze_news(title_en: str, source: str, recent: list) -> dict:
 }}
 
 القواعد:
-- category: military/politics/economy/diplomacy/security/humanitarian/other
+- category: military/politics/economy/diplomacy/security/humanitarian/tech/ai/other
 - importance: 1-10
-- is_duplicate: true إذا كان نفس حدث خبر سابق"""
+- is_duplicate: true إذا كان نفس حدث خبر سابق
+- is_tech: true إذا كان متعلقاً بالتقنية أو الذكاء الاصطناعي أو شركات التكنولوجيا"""
     res = call_ai(system, user)
     if res:
         return res
@@ -304,8 +340,10 @@ def ai_analyze_news(title_en: str, source: str, recent: list) -> dict:
     me    = any(kw in tl for kw in ME_KEYWORDS)
     brk   = any(kw in tl for kw in BREAKING_KEYWORDS)
     ar    = force_translate(title_en)   # ← ترجمة موثوقة
+    tch = any(kw in tl for kw in TECH_KEYWORDS)
     return {"is_duplicate":False,"is_middle_east":me,"is_breaking":brk,
-            "category":"other","importance":6,"title_ar":ar}
+            "is_tech":tch,"category":"tech" if tch else "other",
+            "importance":6,"title_ar":ar}
 
 # ══════════════════════════════════════════════
 #        🌐 جلب الأخبار
@@ -341,6 +379,29 @@ def fetch_news() -> list:
                 })
         except Exception as ex:
             logging.warning(f"⚠️ RSS {src['name']}: {ex}")
+
+    # ── جلب أخبار التقنية ──
+    for src in TECH_SOURCES:
+        try:
+            r    = requests.get(src["rss"], headers=headers, timeout=12)
+            feed = feedparser.parse(r.content)
+            for e in feed.entries[:12]:
+                url   = getattr(e,"link","")
+                title = clean(getattr(e,"title",""))
+                if not url or not title or is_url_sent(url):
+                    continue
+                if not is_fresh_news(e):
+                    continue
+                items.append({
+                    "url":      url,
+                    "title_en": title,
+                    "source":   src["name"],
+                    "priority": "normal",
+                    "type":     "tech",
+                    "age_min":  get_entry_age_minutes(e),
+                })
+        except Exception as ex:
+            logging.warning(f"⚠️ Tech RSS {src['name']}: {ex}")
     return items
 
 # ══════════════════════════════════════════════
@@ -349,12 +410,16 @@ def fetch_news() -> list:
 def quick_filter(items: list) -> list:
     scored = []
     for item in items:
-        tl = item["title_en"].lower()
+        tl  = item["title_en"].lower()
         me  = sum(1 for kw in ME_KEYWORDS       if kw in tl)
         brk = sum(1 for kw in BREAKING_KEYWORDS if kw in tl)
+        tch = sum(1 for kw in TECH_KEYWORDS     if kw in tl)
         if item.get("priority") == "high": me += 2
-        if me > 0 or brk > 0:
-            item["_score"] = me + brk * 2
+        if item.get("type") == "tech":     tch += 3   # مصدر تقني = أولوية
+        if me > 0 or brk > 0 or tch > 0:
+            item["_me"]    = me
+            item["_tch"]   = tch
+            item["_score"] = me + brk * 2 + tch
             scored.append(item)
     scored.sort(key=lambda x: x["_score"], reverse=True)
     return scored
@@ -369,6 +434,8 @@ CATEGORY_EMOJI = {
     "diplomacy":   "🤝",
     "security":    "🔒",
     "humanitarian":"🆘",
+    "tech":        "💻",
+    "ai":          "🤖",
     "other":       "🌐",
 }
 
@@ -421,7 +488,9 @@ def breaking_cycle():
                 logging.info(f"   ♻️ مكرر: {item['title_en'][:50]}")
                 save_news(item["url"],item["title_en"],"","",0,0,0,item["source"])
                 continue
-            if not a.get("is_middle_east"):
+            is_me   = a.get("is_middle_east", False)
+            is_tech = a.get("is_tech", False) or item.get("type") == "tech"
+            if not is_me and not is_tech:
                 continue
             if not a.get("is_breaking") and a.get("importance",0) < 8:
                 continue
@@ -464,7 +533,9 @@ def regular_cycle():
             if a.get("is_duplicate"):
                 save_news(item["url"],item["title_en"],"","",0,0,0,item["source"])
                 continue
-            if not a.get("is_middle_east"):
+            is_me   = a.get("is_middle_east", False)
+            is_tech = a.get("is_tech", False) or item.get("type") == "tech"
+            if not is_me and not is_tech:
                 continue
 
             title_ar   = ensure_arabic(a.get("title_ar",""), item["title_en"])
