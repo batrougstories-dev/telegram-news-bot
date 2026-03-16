@@ -180,6 +180,7 @@ def init_db():
             importance  INTEGER DEFAULT 5,
             is_breaking INTEGER DEFAULT 0,
             is_analysis INTEGER DEFAULT 0,
+            is_tech     INTEGER DEFAULT 0,
             source      TEXT,
             sent_at     DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -193,6 +194,12 @@ def init_db():
             added_at   DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Migration: إضافة أعمدة جديدة إن لم تكن موجودة
+    for col,typ in [("is_tech","INTEGER DEFAULT 0"),("is_analysis","INTEGER DEFAULT 0")]:
+        try:
+            conn.execute(f"ALTER TABLE sent_news ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
     conn.execute("DELETE FROM sent_news WHERE sent_at < datetime('now','-3 days')")
     conn.commit(); conn.close()
     logging.info("✅ DB جاهز")
@@ -231,14 +238,14 @@ def get_recent_titles(hours=48):
     return [r[0] for r in rows if r[0]]
 
 def save_news(url, title_en, title_ar, category, importance,
-              is_breaking, is_analysis, source):
+              is_breaking, is_analysis, is_tech, source):
     conn = sqlite3.connect(DB_FILE)
     try:
         conn.execute(
             "INSERT INTO sent_news(url,title_en,title_ar,category,importance,"
-            "is_breaking,is_analysis,source) VALUES(?,?,?,?,?,?,?,?)",
+            "is_breaking,is_analysis,is_tech,source) VALUES(?,?,?,?,?,?,?,?,?)",
             (url, title_en, title_ar, category, importance,
-             is_breaking, is_analysis, source)
+             is_breaking, is_analysis, is_tech, source)
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -486,7 +493,7 @@ def breaking_cycle():
 
             if a.get("is_duplicate"):
                 logging.info(f"   ♻️ مكرر: {item['title_en'][:50]}")
-                save_news(item["url"],item["title_en"],"","",0,0,0,item["source"])
+                save_news(item["url"],item["title_en"],"","",0,0,0,0,item["source"])
                 continue
             is_me   = a.get("is_middle_east", False)
             is_tech = a.get("is_tech", False) or item.get("type") == "tech"
@@ -504,7 +511,7 @@ def breaking_cycle():
             msg = format_news(title_ar, item["source"], category, is_breaking)
             asyncio.run(send_to_all(msg))
             save_news(item["url"],item["title_en"],title_ar,
-                      category,importance,int(is_breaking),0,item["source"])
+                      category,importance,int(is_breaking),0,int(is_tech),item["source"])
             recent.append(item["title_en"])
             sent += 1
             time.sleep(1.5)
@@ -531,7 +538,7 @@ def regular_cycle():
         for item in items:
             a = ai_analyze_news(item["title_en"], item["source"], recent)
             if a.get("is_duplicate"):
-                save_news(item["url"],item["title_en"],"","",0,0,0,item["source"])
+                save_news(item["url"],item["title_en"],"","",0,0,0,0,item["source"])
                 continue
             is_me   = a.get("is_middle_east", False)
             is_tech = a.get("is_tech", False) or item.get("type") == "tech"
@@ -546,7 +553,7 @@ def regular_cycle():
             msg = format_news(title_ar, item["source"], category, is_breaking)
             asyncio.run(send_to_all(msg))
             save_news(item["url"],item["title_en"],title_ar,
-                      category,importance,int(is_breaking),0,item["source"])
+                      category,importance,int(is_breaking),0,int(is_tech),item["source"])
             logging.info(f"   ✅ {title_ar[:60]}")
             break
 
