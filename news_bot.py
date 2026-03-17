@@ -728,29 +728,41 @@ def trigger():
     return "🚀 تم تشغيل Collect + Digest — انتظر 30 ثانية", 200
 
 @flask_app.route("/debug")
+@flask_app.route("/debug")
 def debug_fetch():
-    """تشخيص: ماذا تُرجع fetch_all؟"""
+    """تشخيص كامل: network + fetch"""
+    hdr = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/4.0)"}
+    net = {}
+    for src in SOURCES[:4]:
+        try:
+            r = requests.get(src["url"], headers=hdr, timeout=10)
+            net[src["name"]] = f"HTTP {r.status_code} / {len(r.content)}B"
+        except Exception as ex:
+            net[src["name"]] = f"ERR: {str(ex)[:50]}"
+
     items = fetch_all()
     blist, oos, kept = [], [], []
     for it in items:
         tl  = it["title"].lower()
-        cat = it.get("cat","")
+        cat = it.get("cat", "")
         if any(kw in tl for kw in BLACKLIST_KW):
-            blist.append({"title": it["title"][:80], "source": it["source"]})
+            blist.append(it["title"][:80])
             continue
-        in_scope = (cat in ("mideast","tech","economy","health")) or                    any(kw in tl for kw in ALL_KW)
+        in_scope = (cat in ("mideast", "tech", "economy", "health")) or \
+                   any(kw in tl for kw in ALL_KW)
         if not in_scope:
-            oos.append({"title": it["title"][:80], "source": it["source"]})
+            oos.append(it["title"][:80])
         else:
-            kept.append({"title": it["title"][:80], "source": it["source"]})
+            kept.append(it["title"][:80])
+
     return json.dumps({
+        "network": net,
         "total_fetched": len(items),
         "kept": len(kept),
         "blacklisted": len(blist),
         "out_of_scope": len(oos),
         "sample_kept": kept[:5],
-        "sample_blacklisted": blist[:5],
-        "sample_oos": oos[:5],
+        "sample_blacklisted": blist[:3],
     }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
 
 @flask_app.route("/stats")
