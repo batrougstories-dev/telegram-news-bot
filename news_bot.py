@@ -39,7 +39,7 @@ GEMINI_URL  = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.
 COLLECT_EVERY = 5    # دقائق — جمع الأخبار
 DIGEST_EVERY  = 30   # دقيقة  — إرسال الموجز
 PING_EVERY    = 5    # دقائق — self-ping
-NEWS_MAX_AGE  = 75   # دقيقة  — أقصى عمر للخبر
+NEWS_MAX_AGE  = 360  # دقيقة  — أقصى عمر للخبر (6 ساعات)
 DIGEST_MIN    = 5    # أقل عدد في الموجز
 DIGEST_MAX    = 15   # أكثر عدد في الموجز
 DEDUP_HOURS   = 6    # ساعات فحص التكرار
@@ -514,15 +514,15 @@ def fetch_all() -> list[dict]:
     items   = []
     for src in SOURCES:
         try:
-            r    = requests.get(src["url"], headers=headers, timeout=12)
+            r    = requests.get(src["url"], headers=headers, timeout=15)
             feed = feedparser.parse(r.content)
-            for e in feed.entries[:15]:
+            src_count = 0
+            for e in feed.entries[:20]:
                 url   = getattr(e, "link", "").strip()
                 title = clean_title(getattr(e, "title", ""))
                 if not url or not title:
                     continue
                 age = get_age_min(e)
-                # تخطي الأخبار القديمة جداً
                 if age is not None and age > NEWS_MAX_AGE:
                     continue
                 items.append({
@@ -532,8 +532,11 @@ def fetch_all() -> list[dict]:
                     "age":    age,
                     "cat":    src.get("cat", ""),
                 })
+                src_count += 1
+            logging.info(f"  📡 {src['name']}: {src_count}/{len(feed.entries)} خبر")
         except Exception as ex:
-            logging.warning(f"RSS [{src['name']}]: {ex}")
+            logging.warning(f"  ❌ RSS [{src['name']}]: {ex}")
+    logging.info(f"  📊 fetch_all: {len(items)} إجمالي")
     return items
 
 # ══════════════════════════════════════════════════════════
