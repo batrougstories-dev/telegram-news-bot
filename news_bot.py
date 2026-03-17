@@ -724,6 +724,32 @@ def trigger():
     threading.Thread(target=run, daemon=True).start()
     return "🚀 تم تشغيل Collect + Digest — انتظر 30 ثانية", 200
 
+@flask_app.route("/debug")
+def debug_fetch():
+    """تشخيص: ماذا تُرجع fetch_all؟"""
+    items = fetch_all()
+    blist, oos, kept = [], [], []
+    for it in items:
+        tl  = it["title"].lower()
+        cat = it.get("cat","")
+        if any(kw in tl for kw in BLACKLIST_KW):
+            blist.append({"title": it["title"][:80], "source": it["source"]})
+            continue
+        in_scope = (cat in ("mideast","tech","economy","health")) or                    any(kw in tl for kw in ALL_KW)
+        if not in_scope:
+            oos.append({"title": it["title"][:80], "source": it["source"]})
+        else:
+            kept.append({"title": it["title"][:80], "source": it["source"]})
+    return json.dumps({
+        "total_fetched": len(items),
+        "kept": len(kept),
+        "blacklisted": len(blist),
+        "out_of_scope": len(oos),
+        "sample_kept": kept[:5],
+        "sample_blacklisted": blist[:5],
+        "sample_oos": oos[:5],
+    }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
+
 @flask_app.route("/stats")
 def stats():
     conn = get_db()
