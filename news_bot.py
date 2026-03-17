@@ -58,18 +58,17 @@ BREAKING_KW = [
 #  📡  SOURCES — كل الأخبار العالمية بدون تصنيف
 # ══════════════════════════════════════════════════════════
 SOURCES = [
-    # ── غربي (3 مصادر فقط) ───────────────────────
+    # ── غربي (3 مصادر) ────────────────────────────
     {"name": "Axios",              "url": "https://api.axios.com/feed/"},
     {"name": "Fox News",           "url": "https://moxie.foxnews.com/google-publisher/latest.xml"},
     {"name": "Bloomberg",          "url": "https://feeds.bloomberg.com/markets/news.rss"},
-    # ── سعودي وخليجي ─────────────────────────────
-    {"name": "Al Jazeera Arabic",  "url": "https://www.aljazeera.net/rss"},
-    {"name": "Sky News Arabia",    "url": "https://www.skynewsarabia.com/rss"},
-    {"name": "أخبار السعودية",     "url": "https://news.google.com/rss/search?q=السعودية+عاجل&hl=ar&gl=SA&ceid=SA:ar"},
-    {"name": "أخبار الخليج",       "url": "https://news.google.com/rss/search?q=الإمارات+قطر+الكويت+البحرين&hl=ar&gl=SA&ceid=SA:ar"},
-    {"name": "Saudi Arabia News",  "url": "https://news.google.com/rss/search?q=Saudi+Arabia&hl=en-US&gl=US&ceid=US:en"},
-    {"name": "Gulf States News",   "url": "https://news.google.com/rss/search?q=UAE+Qatar+Kuwait+Bahrain&hl=en-US&gl=US&ceid=US:en"},
-    {"name": "Al Jazeera English", "url": "https://www.aljazeera.com/xml/rss/all.xml"},
+    # ── عربي موثوق ────────────────────────────────
+    {"name": "الجزيرة",            "url": "https://www.aljazeera.net/rss"},
+    {"name": "الجزيرة إنجليزي",    "url": "https://www.aljazeera.com/xml/rss/all.xml"},
+    {"name": "سكاي نيوز عربية",    "url": "https://www.skynewsarabia.com/rss"},
+    # ── خليجي وسعودي (Google News موثوق) ──────────
+    {"name": "سعودي وخليجي",       "url": "https://news.google.com/rss/search?q=site:alarabiya.net+OR+site:skynewsarabia.com&hl=ar&gl=SA&ceid=SA:ar"},
+    {"name": "الشرق الأوسط",       "url": "https://news.google.com/rss/search?q=السعودية+الإمارات+قطر+site:reuters.com+OR+site:bbc.com&hl=ar&gl=SA&ceid=SA:ar"},
 ]
 
 flask_app = Flask(__name__)
@@ -375,26 +374,28 @@ def ai_build_digest(items: list[dict], recent_ar: list[str]) -> list[dict]:
     )
     recent_s = "\n".join(f"- {t}" for t in recent_ar[:30]) or "لا يوجد"
 
-    system = "أنت محرر أخبار عالمي محترف يصدر موجزاً إخبارياً. أجب بـ JSON فقط."
-    user   = f"""لديك {len(items)} خبر من مصادر دولية خلال آخر 30 دقيقة:
+    system = "أنت محرر أخبار عالمي كبير تصدر موجزاً إخبارياً مختصراً. أجب بـ JSON فقط."
+    user   = f"""لديك {len(items)} خبر. اختر منها أهم {DIGEST_MIN}-{DIGEST_MAX} خبراً فقط:
 
 {headlines}
 
-الأخبار المُرسلة مسبقاً (لا تكررها إطلاقاً):
+أخبار سبق إرسالها — لا تكررها:
 {recent_s}
 
-المطلوب:
-• اختر أهم {DIGEST_MIN} إلى {DIGEST_MAX} خبراً عالمياً متنوعاً
-• ادمج الأخبار المتشابهة (نفس الحدث من مصادر متعددة = خبر واحد)
-• رتّبها تنازلياً من الأهم للأقل أهمية
-• ترجم كل عنوان للعربية بأسلوب صحفي احترافي
-• لا تكرر أي خبر موجود في قائمة المُرسلة
+قواعد الاختيار (صارمة):
+✅ اقبل: أحداث سياسية كبرى، حروب، اتفاقيات، كوارث، قرارات اقتصادية كبرى، تقنية مؤثرة
+❌ ارفض تماماً: نتائج رياضية، أخبار محلية أمريكية تافهة، بيانات مالية دقيقة (سندات/عملات/مؤشرات صغيرة)، إعلانات دعاية، أخبار إثارة بدون مضمون
 
-أجب بهذا الشكل الدقيق:
+الترجمة للعربية:
+• جملة واحدة قصيرة ومفهومة
+• لا تترجم حرفياً — اكتب المعنى بوضوح
+• بالعربية الفصحى المبسطة
+
+أجب بهذا الشكل:
 {{
   "items": [
-    {{"rank": 1, "title_ar": "العنوان بالعربية", "source": "اسم المصدر", "is_breaking": false}},
-    {{"rank": 2, "title_ar": "العنوان بالعربية", "source": "اسم المصدر", "is_breaking": true}}
+    {{"rank": 1, "title_ar": "عنوان مختصر وواضح", "source": "المصدر", "is_breaking": false}},
+    {{"rank": 2, "title_ar": "عنوان مختصر وواضح", "source": "المصدر", "is_breaking": true}}
   ]
 }}"""
 
