@@ -63,29 +63,28 @@ BREAKING_KW = [
 
 SOURCES = [
     # ── 🌍 شرق أوسط (عربي + دولي) ─────────────────
-    {"name": "الجزيرة",            "url": "https://www.aljazeera.net/rss",                    "cat": "mideast"},
-    {"name": "الجزيرة إنجليزي",    "url": "https://www.aljazeera.com/xml/rss/all.xml",         "cat": "mideast"},
-    {"name": "سكاي نيوز عربية",    "url": "https://www.skynewsarabia.com/rss",                "cat": "mideast"},
-    {"name": "العربية",            "url": "https://www.alarabiya.net/tools/rss",               "cat": "mideast"},
-    {"name": "Middle East Eye",    "url": "https://www.middleeasteye.net/rss",                 "cat": "mideast"},
-    {"name": "Reuters Middle East","url": "https://feeds.reuters.com/Reuters/worldNews",       "cat": "mideast"},
+    {"name": "الجزيرة",            "url": "https://www.aljazeera.net/rss",                                                    "cat": "mideast"},
+    {"name": "الجزيرة إنجليزي",    "url": "https://www.aljazeera.com/xml/rss/all.xml",                                         "cat": "mideast"},
+    {"name": "سكاي نيوز عربية",    "url": "https://www.skynewsarabia.com/rss",                                                "cat": "mideast"},
+    {"name": "BBC Arabic",         "url": "https://feeds.bbci.co.uk/arabic/rss.xml",                                          "cat": "mideast"},
+    {"name": "Middle East Eye",    "url": "https://www.middleeasteye.net/rss/news",                                           "cat": "mideast"},
+    {"name": "AP World",           "url": "https://rsshub.app/apnews/topics/world-news",                                      "cat": "mideast"},
 
     # ── 💻 تقنية وذكاء اصطناعي ──────────────────────
-    {"name": "TechCrunch",         "url": "https://techcrunch.com/feed/",                     "cat": "tech"},
-    {"name": "The Verge",          "url": "https://www.theverge.com/rss/index.xml",            "cat": "tech"},
-    {"name": "Ars Technica",       "url": "https://feeds.arstechnica.com/arstechnica/index",   "cat": "tech"},
-    {"name": "MIT Tech Review",    "url": "https://www.technologyreview.com/feed/",            "cat": "tech"},
-    {"name": "VentureBeat",        "url": "https://venturebeat.com/feed/",                    "cat": "tech"},
+    {"name": "TechCrunch",         "url": "https://techcrunch.com/feed/",                                                    "cat": "tech"},
+    {"name": "The Verge",          "url": "https://www.theverge.com/rss/index.xml",                                          "cat": "tech"},
+    {"name": "Ars Technica",       "url": "https://feeds.arstechnica.com/arstechnica/index",                                  "cat": "tech"},
+    {"name": "VentureBeat",        "url": "https://venturebeat.com/feed/",                                                   "cat": "tech"},
 
     # ── 📈 اقتصاد دولي ──────────────────────────────
-    {"name": "Reuters Business",   "url": "https://feeds.reuters.com/reuters/businessNews",   "cat": "economy"},
-    {"name": "Bloomberg Markets",  "url": "https://feeds.bloomberg.com/markets/news.rss",     "cat": "economy"},
-    {"name": "Financial Times",    "url": "https://www.ft.com/rss/home",                      "cat": "economy"},
+    {"name": "Bloomberg Markets",  "url": "https://feeds.bloomberg.com/markets/news.rss",                                    "cat": "economy"},
+    {"name": "CNBC Economy",       "url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",                            "cat": "economy"},
+    {"name": "FT Markets",         "url": "https://www.ft.com/rss/home/uk",                                                  "cat": "economy"},
 
     # ── 🏥 صحة وطب ──────────────────────────────────
-    {"name": "Reuters Health",     "url": "https://feeds.reuters.com/reuters/healthNews",     "cat": "health"},
-    {"name": "WHO News",           "url": "https://www.who.int/rss-feeds/news-english.xml",   "cat": "health"},
-    {"name": "Medical Xpress",     "url": "https://medicalxpress.com/rss-feed/",              "cat": "health"},
+    {"name": "WHO News",           "url": "https://www.who.int/rss-feeds/news-english.xml",                                  "cat": "health"},
+    {"name": "Medical Xpress",     "url": "https://medicalxpress.com/rss-feed/",                                             "cat": "health"},
+    {"name": "Stat News",          "url": "https://www.statnews.com/feed/",                                                  "cat": "health"},
 ]
 
 # كلمات مفتاحية للتصفية المبدئية قبل AI
