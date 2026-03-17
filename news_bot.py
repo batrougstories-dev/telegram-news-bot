@@ -729,40 +729,54 @@ def trigger():
 
 @flask_app.route("/debug")
 @flask_app.route("/debug")
+@flask_app.route("/debug")
 def debug_fetch():
-    """تشخيص كامل: network + fetch"""
+    """تشخيص عميق: network + age + entries"""
+    import feedparser as _fp
     hdr = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/4.0)"}
-    net = {}
-    for src in SOURCES[:4]:
-        try:
-            r = requests.get(src["url"], headers=hdr, timeout=10)
-            net[src["name"]] = f"HTTP {r.status_code} / {len(r.content)}B"
-        except Exception as ex:
-            net[src["name"]] = f"ERR: {str(ex)[:50]}"
 
-    items = fetch_all()
-    blist, oos, kept = [], [], []
-    for it in items:
-        tl  = it["title"].lower()
-        cat = it.get("cat", "")
-        if any(kw in tl for kw in BLACKLIST_KW):
-            blist.append(it["title"][:80])
-            continue
-        in_scope = (cat in ("mideast", "tech", "economy", "health")) or \
-                   any(kw in tl for kw in ALL_KW)
-        if not in_scope:
-            oos.append(it["title"][:80])
-        else:
-            kept.append(it["title"][:80])
+    # 1) اختبار الشبكة + تحليل عينة من كل مصدر
+    src_info = {}
+    total_entries = 0
+    age_samples = []
+    for src in SOURCES:
+        try:
+            r    = requests.get(src["url"], headers=hdr, timeout=12)
+            feed = _fp.parse(r.content)
+            n    = len(feed.entries)
+            total_entries += n
+            # عينة من أعمار المقالات
+            ages = []
+            for e in feed.entries[:5]:
+                age = get_age_min(e)
+                ages.append(age)
+                age_samples.append({"src": src["name"], "title": getattr(e,"title","")[:50], "age": age})
+            src_info[src["name"]] = {"status": r.status_code, "entries": n, "ages": ages}
+        except Exception as ex:
+            src_info[src["name"]] = {"error": str(ex)[:60]}
+
+    # 2) fetch_all بدون فلتر عمر
+    items_nofilter = []
+    for src in SOURCES:
+        try:
+            r    = requests.get(src["url"], headers=hdr, timeout=12)
+            feed = _fp.parse(r.content)
+            for e in feed.entries[:5]:
+                url   = getattr(e, "link", "").strip()
+                title = clean_title(getattr(e, "title", ""))
+                if url and title:
+                    age = get_age_min(e)
+                    items_nofilter.append({"title": title[:60], "source": src["name"], "age": age})
+        except:
+            pass
 
     return json.dumps({
-        "network": net,
-        "total_fetched": len(items),
-        "kept": len(kept),
-        "blacklisted": len(blist),
-        "out_of_scope": len(oos),
-        "sample_kept": kept[:5],
-        "sample_blacklisted": blist[:3],
+        "sources": src_info,
+        "total_entries": total_entries,
+        "NEWS_MAX_AGE": NEWS_MAX_AGE,
+        "items_no_age_filter": len(items_nofilter),
+        "age_samples": age_samples[:10],
+        "fetch_all_result": len(fetch_all()),
     }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
 
 @flask_app.route("/stats")
