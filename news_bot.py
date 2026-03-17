@@ -364,42 +364,31 @@ def ai_check_breaking(title: str, source: str) -> dict:
     }
 
 # ── 2) بناء الموجز ───────────────────────────────────────
-def ai_build_digest(items: list[dict], recent_ar: list[str]) -> list[dict]:
-    """
-    يأخذ أخبار خام → يختار أهم 12-22 عالمياً → يترجمها
-    """
+def ai_build_digest(items: list, recent_ar: list) -> list:
+    """يختار أهم الأخبار ويترجمها — تصفية صارمة"""
+    if not items:
+        return []
+
     headlines = "\n".join(
         f"{i+1}. [{it['source']}] {it['title_en']}"
         for i, it in enumerate(items)
     )
-    recent_s = "\n".join(f"- {t}" for t in recent_ar[:30]) or "لا يوجد"
+    recent_s = "\n".join(f"- {t}" for t in recent_ar[:20]) or "لا يوجد"
 
-    system = "أنت محرر أخبار عالمي كبير تصدر موجزاً إخبارياً مختصراً. أجب بـ JSON فقط."
-    user   = f"""لديك {len(items)} خبر. اختر منها أهم {DIGEST_MIN}-{DIGEST_MAX} خبراً فقط:
+    system = "أنت محرر أخبار متمرس. مهمتك تصفية صارمة. أجب بـ JSON فقط."
+    user = (
+        f"من {len(items)} خبر، اختر فقط ما يستحق النشر عالمياً:\n\n"
+        f"{headlines}\n\n"
+        f"سبق نشره (لا تكرر):\n{recent_s}\n\n"
+        "معيار القبول الوحيد: هل يؤثر هذا الخبر على ملايين الناس؟\n"
+        "✅ اقبل: حرب، هجوم، كارثة، قرار سياسي دولي، اتفاقية، اقتصاد دولي كبير، تقنية مؤثرة\n"
+        "❌ ارفض: رياضة، تشريعات محلية، بيانات بورصة صغيرة، إثارة وتهويل، أخبار شركات محدودة\n\n"
+        "اختر 5 إلى 12 فقط من الأفضل. إذا لم يوجد ما يكفي فاختر أقل.\n"
+        "الترجمة: جملة قصيرة ومباشرة بالعربية الواضحة — لا ترجمة حرفية.\n\n"
+        '{"items":[{"rank":1,"title_ar":"عنوان","source":"المصدر","is_breaking":false}]}'
+    )
 
-{headlines}
-
-أخبار سبق إرسالها — لا تكررها:
-{recent_s}
-
-قواعد الاختيار (صارمة):
-✅ اقبل: أحداث سياسية كبرى، حروب، اتفاقيات، كوارث، قرارات اقتصادية كبرى، تقنية مؤثرة
-❌ ارفض تماماً: نتائج رياضية، أخبار محلية أمريكية تافهة، بيانات مالية دقيقة (سندات/عملات/مؤشرات صغيرة)، إعلانات دعاية، أخبار إثارة بدون مضمون
-
-الترجمة للعربية:
-• جملة واحدة قصيرة ومفهومة
-• لا تترجم حرفياً — اكتب المعنى بوضوح
-• بالعربية الفصحى المبسطة
-
-أجب بهذا الشكل:
-{{
-  "items": [
-    {{"rank": 1, "title_ar": "عنوان مختصر وواضح", "source": "المصدر", "is_breaking": false}},
-    {{"rank": 2, "title_ar": "عنوان مختصر وواضح", "source": "المصدر", "is_breaking": true}}
-  ]
-}}"""
-
-    res = call_ai(system, user, max_tokens=2500)
+    res = call_ai(system, user, max_tokens=1500)
 
     if res and "items" in res:
         out = []
@@ -407,26 +396,20 @@ def ai_build_digest(items: list[dict], recent_ar: list[str]) -> list[dict]:
             ar = ensure_arabic(it.get("title_ar", ""), "")
             if ar:
                 out.append({
-                    "title_ar":   ar,
-                    "source":     it.get("source", ""),
+                    "title_ar":    ar,
+                    "source":      it.get("source", ""),
                     "is_breaking": bool(it.get("is_breaking", False)),
                 })
         return out
 
-    # Fallback: AI فشل → ترجم أفضل ما عندنا
-    logging.warning("⚠️ AI digest فشل — fallback Google Translate")
+    # Fallback: AI فشل → ترجم أهم 5 فقط بدلاً من كل شيء
+    logging.warning("⚠️ AI digest فشل — fallback أهم 5")
     return [
-        {
-            "title_ar":   force_translate(p["title_en"]),
-            "source":     p["source"],
-            "is_breaking": False,
-        }
-        for p in items[:DIGEST_MAX]
+        {"title_ar": force_translate(p["title_en"]),
+         "source": p["source"], "is_breaking": False}
+        for p in items[:5]
     ]
 
-# ══════════════════════════════════════════════════════════
-#  📡  RSS FETCHER
-# ══════════════════════════════════════════════════════════
 def clean_title(t: str) -> str:
     if not t: return ""
     t = html.unescape(t)
