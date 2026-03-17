@@ -28,8 +28,13 @@ SERVICE_URL  = os.environ.get("SERVICE_URL", "https://telegram-news-bot-zcn8.onr
 DB_FILE      = "/tmp/news.db"
 PORT         = int(os.environ.get("PORT", 10000))
 
+# GitHub AI (GPT-4o-mini) — للتحليل والاختيار
 AI_MODEL    = "gpt-4o-mini"
 AI_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
+
+# Google Gemini — لكتابة التغريدات بالعامية
+GEMINI_KEY  = os.environ.get("GEMINI_KEY", "")
+GEMINI_URL  = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
 COLLECT_EVERY = 5    # دقائق — جمع الأخبار
 DIGEST_EVERY  = 30   # دقيقة  — إرسال الموجز
@@ -53,26 +58,18 @@ BREAKING_KW = [
 #  📡  SOURCES — كل الأخبار العالمية بدون تصنيف
 # ══════════════════════════════════════════════════════════
 SOURCES = [
-    # ── عالمي Tier 1 ─────────────────────────────
-    {"name": "Reuters",            "url": "https://feeds.reuters.com/reuters/topNews"},
-    {"name": "AP News",            "url": "https://feeds.apnews.com/rss/apf-topnews"},
-    {"name": "BBC World",          "url": "http://feeds.bbci.co.uk/news/world/rss.xml"},
-    {"name": "The Guardian",       "url": "https://www.theguardian.com/world/rss"},
-    {"name": "Al Jazeera",         "url": "https://www.aljazeera.com/xml/rss/all.xml"},
-    {"name": "Bloomberg",          "url": "https://feeds.bloomberg.com/markets/news.rss"},
-    {"name": "Bloomberg Politics", "url": "https://feeds.bloomberg.com/politics/news.rss"},
+    # ── غربي (3 مصادر فقط) ───────────────────────
     {"name": "Axios",              "url": "https://api.axios.com/feed/"},
-    # ── إقليمي ───────────────────────────────────
-    {"name": "BBC Middle East",    "url": "http://feeds.bbci.co.uk/news/world/middle_east/rss.xml"},
-    {"name": "Reuters ME",         "url": "https://news.google.com/rss/search?q=reuters+middle+east&hl=en-US&gl=US&ceid=US:en"},
-    {"name": "AP Middle East",     "url": "https://news.google.com/rss/search?q=AP+middle+east&hl=en-US&gl=US&ceid=US:en"},
-    # ── تقنية وذكاء اصطناعي ──────────────────────
-    {"name": "TechCrunch",         "url": "https://techcrunch.com/feed/"},
-    {"name": "The Verge",          "url": "https://www.theverge.com/rss/index.xml"},
-    {"name": "VentureBeat",        "url": "https://venturebeat.com/feed/"},
-    {"name": "MIT Tech Review",    "url": "https://www.technologyreview.com/feed/"},
-    {"name": "Bloomberg Tech",     "url": "https://feeds.bloomberg.com/technology/news.rss"},
-    {"name": "Wired",              "url": "https://www.wired.com/feed/rss"},
+    {"name": "Fox News",           "url": "https://moxie.foxnews.com/google-publisher/latest.xml"},
+    {"name": "Bloomberg",          "url": "https://feeds.bloomberg.com/markets/news.rss"},
+    # ── سعودي وخليجي ─────────────────────────────
+    {"name": "Al Jazeera Arabic",  "url": "https://www.aljazeera.net/rss"},
+    {"name": "Sky News Arabia",    "url": "https://www.skynewsarabia.com/rss"},
+    {"name": "أخبار السعودية",     "url": "https://news.google.com/rss/search?q=السعودية+عاجل&hl=ar&gl=SA&ceid=SA:ar"},
+    {"name": "أخبار الخليج",       "url": "https://news.google.com/rss/search?q=الإمارات+قطر+الكويت+البحرين&hl=ar&gl=SA&ceid=SA:ar"},
+    {"name": "Saudi Arabia News",  "url": "https://news.google.com/rss/search?q=Saudi+Arabia&hl=en-US&gl=US&ceid=US:en"},
+    {"name": "Gulf States News",   "url": "https://news.google.com/rss/search?q=UAE+Qatar+Kuwait+Bahrain&hl=en-US&gl=US&ceid=US:en"},
+    {"name": "Al Jazeera English", "url": "https://www.aljazeera.com/xml/rss/all.xml"},
 ]
 
 flask_app = Flask(__name__)
@@ -265,6 +262,85 @@ def call_ai(system: str, user: str, max_tokens: int = 500) -> dict | None:
         except Exception as e:
             logging.warning(f"AI error: {e}")
         return None
+
+# ── 0) Gemini — تغريدات بالعامية ────────────────────────
+def call_gemini(prompt: str) -> str | None:
+    """يستدعي Gemini ويُرجع نصاً"""
+    if not GEMINI_KEY:
+        return None
+    try:
+        r = requests.post(
+            GEMINI_URL,
+            params={"key": GEMINI_KEY},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": 2000,
+                    "temperature":     0.7,
+                },
+            },
+            timeout=30,
+        )
+        data = r.json()
+        if "candidates" in data:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        logging.warning(f"Gemini error: {data.get('error',{}).get('message','')}")
+    except Exception as e:
+        logging.warning(f"Gemini exception: {e}")
+    return None
+
+def gemini_style_digest(items: list[dict]) -> list[dict]:
+    """
+    يحوّل الأخبار المختارة إلى تغريدات بالعامية السعودية/الخليجية
+    أسلوب خفيف، مباشر، وجذاب — مثل تغريدة تويتر
+    """
+    numbered = "\n".join(
+        f"{i+1}. {it['title_ar']} — {it['source']}"
+        for i, it in enumerate(items)
+    )
+
+    prompt = f"""أنت محرر أخبار سعودي ظريف على تويتر.
+
+عندك هالأخبار:
+{numbered}
+
+المطلوب:
+- أعد كتابة كل خبر كتغريدة واحدة قصيرة
+- باللهجة العامية السعودية أو الخليجية
+- أسلوب خفيف، مباشر، وجذاب
+- أضف إيموجي مناسب لكل تغريدة في البداية
+- الخبر العاجل أضف 🔴 في البداية
+- لا تزيد كل تغريدة عن سطرين
+- حافظ على اسم المصدر في النهاية
+
+أجب بهذا الشكل فقط (رقم ثم التغريدة):
+1. 🔴 نص التغريدة — المصدر
+2. 💡 نص التغريدة — المصدر
+..."""
+
+    result = call_gemini(prompt)
+    if not result:
+        return items  # fallback: الأخبار كما هي
+
+    # تحليل النتيجة
+    styled = []
+    lines  = [l.strip() for l in result.split("\n") if l.strip()]
+    for i, line in enumerate(lines):
+        if i >= len(items): break
+        # أزل الرقم من البداية إن وجد
+        line = re.sub(r"^\d+\.\s*", "", line)
+        if line:
+            styled.append({
+                "title_ar":   line,
+                "source":     items[i]["source"],
+                "is_breaking": items[i].get("is_breaking", False),
+            })
+
+    # إذا Gemini لم يُرجع بعض الأخبار، أكمل من الأصلية
+    if len(styled) < len(items):
+        styled += items[len(styled):]
+
+    return styled
 
 # ── 1) فحص سريع للعاجل ───────────────────────────────────
 def ai_check_breaking(title: str, source: str) -> dict:
@@ -505,6 +581,11 @@ def digest_cycle():
             for p in pending[len(items):DIGEST_MIN]
         ]
         items += extra
+
+    # Gemini: يحوّل الأخبار لتغريدات بالعامية (إذا كان المفتاح متوفراً)
+    if GEMINI_KEY:
+        logging.info("  ✨ Gemini يكتب التغريدات...")
+        items = gemini_style_digest(items)
 
     msg = fmt_digest(items)
     send_to_all(msg)
