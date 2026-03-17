@@ -40,8 +40,8 @@ COLLECT_EVERY = 5    # دقائق — جمع الأخبار
 DIGEST_EVERY  = 30   # دقيقة  — إرسال الموجز
 PING_EVERY    = 5    # دقائق — self-ping
 NEWS_MAX_AGE  = 75   # دقيقة  — أقصى عمر للخبر
-DIGEST_MIN    = 12   # أقل عدد في الموجز
-DIGEST_MAX    = 22   # أكثر عدد في الموجز
+DIGEST_MIN    = 5    # أقل عدد في الموجز
+DIGEST_MAX    = 15   # أكثر عدد في الموجز
 DEDUP_HOURS   = 6    # ساعات فحص التكرار
 
 # كلمات الكشف المبدئي عن العاجل (قبل سؤال AI)
