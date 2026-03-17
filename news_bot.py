@@ -57,19 +57,65 @@ BREAKING_KW = [
 # ══════════════════════════════════════════════════════════
 #  📡  SOURCES — كل الأخبار العالمية بدون تصنيف
 # ══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
+#  الفئات المقبولة: 🌍 شرق أوسط | 💻 تقنية | 📈 اقتصاد | 🏥 صحة
+# ══════════════════════════════════════════════════════════
+
 SOURCES = [
-    # ── غربي (3 مصادر) ────────────────────────────
-    {"name": "Axios",              "url": "https://api.axios.com/feed/"},
-    {"name": "Fox News",           "url": "https://moxie.foxnews.com/google-publisher/latest.xml"},
-    {"name": "Bloomberg",          "url": "https://feeds.bloomberg.com/markets/news.rss"},
-    # ── عربي موثوق ────────────────────────────────
-    {"name": "الجزيرة",            "url": "https://www.aljazeera.net/rss"},
-    {"name": "الجزيرة إنجليزي",    "url": "https://www.aljazeera.com/xml/rss/all.xml"},
-    {"name": "سكاي نيوز عربية",    "url": "https://www.skynewsarabia.com/rss"},
-    # ── خليجي وسعودي (Google News موثوق) ──────────
-    {"name": "سعودي وخليجي",       "url": "https://news.google.com/rss/search?q=site:alarabiya.net+OR+site:skynewsarabia.com&hl=ar&gl=SA&ceid=SA:ar"},
-    {"name": "الشرق الأوسط",       "url": "https://news.google.com/rss/search?q=السعودية+الإمارات+قطر+site:reuters.com+OR+site:bbc.com&hl=ar&gl=SA&ceid=SA:ar"},
+    # ── 🌍 شرق أوسط (عربي + دولي) ─────────────────
+    {"name": "الجزيرة",            "url": "https://www.aljazeera.net/rss",                    "cat": "mideast"},
+    {"name": "الجزيرة إنجليزي",    "url": "https://www.aljazeera.com/xml/rss/all.xml",         "cat": "mideast"},
+    {"name": "سكاي نيوز عربية",    "url": "https://www.skynewsarabia.com/rss",                "cat": "mideast"},
+    {"name": "العربية",            "url": "https://www.alarabiya.net/tools/rss",               "cat": "mideast"},
+    {"name": "Middle East Eye",    "url": "https://www.middleeasteye.net/rss",                 "cat": "mideast"},
+    {"name": "Reuters Middle East","url": "https://feeds.reuters.com/Reuters/worldNews",       "cat": "mideast"},
+
+    # ── 💻 تقنية وذكاء اصطناعي ──────────────────────
+    {"name": "TechCrunch",         "url": "https://techcrunch.com/feed/",                     "cat": "tech"},
+    {"name": "The Verge",          "url": "https://www.theverge.com/rss/index.xml",            "cat": "tech"},
+    {"name": "Ars Technica",       "url": "https://feeds.arstechnica.com/arstechnica/index",   "cat": "tech"},
+    {"name": "MIT Tech Review",    "url": "https://www.technologyreview.com/feed/",            "cat": "tech"},
+    {"name": "VentureBeat",        "url": "https://venturebeat.com/feed/",                    "cat": "tech"},
+
+    # ── 📈 اقتصاد دولي ──────────────────────────────
+    {"name": "Reuters Business",   "url": "https://feeds.reuters.com/reuters/businessNews",   "cat": "economy"},
+    {"name": "Bloomberg Markets",  "url": "https://feeds.bloomberg.com/markets/news.rss",     "cat": "economy"},
+    {"name": "Financial Times",    "url": "https://www.ft.com/rss/home",                      "cat": "economy"},
+
+    # ── 🏥 صحة وطب ──────────────────────────────────
+    {"name": "Reuters Health",     "url": "https://feeds.reuters.com/reuters/healthNews",     "cat": "health"},
+    {"name": "WHO News",           "url": "https://www.who.int/rss-feeds/news-english.xml",   "cat": "health"},
+    {"name": "Medical Xpress",     "url": "https://medicalxpress.com/rss-feed/",              "cat": "health"},
 ]
+
+# كلمات مفتاحية للتصفية المبدئية قبل AI
+MIDEAST_KW = [
+    "israel","palestine","gaza","west bank","iran","iraq","syria","lebanon","hezbollah","hamas",
+    "saudi","riyadh","mbs","uae","dubai","abu dhabi","qatar","doha","kuwait","bahrain","oman","yemen",
+    "jordan","egypt","cairo","turkey","erdogan","netanyahu","biden","middle east","arab","persian gulf",
+    "السعودية","الإمارات","قطر","الكويت","إيران","العراق","سوريا","لبنان","مصر","الأردن","فلسطين","غزة",
+    "الجزيرة العربية","الخليج","إسرائيل","تركيا","اليمن","عمان","البحرين",
+]
+TECH_KW = [
+    "ai","artificial intelligence","chatgpt","openai","google","microsoft","apple","nvidia","meta",
+    "robot","autonomous","machine learning","deep learning","llm","gpt","gemini","claude","chips",
+    "semiconductor","quantum","cybersecurity","hack","data breach","startup","tech","software","hardware",
+    "smartphone","electric vehicle","ev","tesla","spacex","satellite","5g","cloud","blockchain",
+    "ذكاء اصطناعي","تقنية","تكنولوجيا","روبوت","سيليكون","نفيديا","آبل","جوجل","مايكروسوفت",
+]
+ECON_KW = [
+    "economy","gdp","inflation","recession","interest rate","federal reserve","imf","world bank",
+    "opec","oil price","stock market","nasdaq","dow jones","trade war","tariff","sanctions",
+    "investment","merger","acquisition","ipo","bankruptcy","unemployment","export","import",
+    "اقتصاد","نفط","أوبك","تضخم","فائدة","بورصة","تجارة","استثمار","ركود","عملة","دولار","يورو",
+]
+HEALTH_KW = [
+    "covid","pandemic","outbreak","disease","virus","vaccine","cancer","diabetes","obesity","malaria",
+    "ebola","mpox","monkeypox","who","cdc","epidemic","drug approval","fda","clinical trial",
+    "health","medicine","therapy","hospital","mortality","pharmaceutical","antibiotic",
+    "وباء","فيروس","لقاح","سرطان","صحة","دواء","مستشفى","وفيات","جائحة","منظمة الصحة",
+]
+ALL_KW = set(MIDEAST_KW + TECH_KW + ECON_KW + HEALTH_KW)
 
 flask_app = Flask(__name__)
 
@@ -375,17 +421,19 @@ def ai_build_digest(items: list, recent_ar: list) -> list:
     )
     recent_s = "\n".join(f"- {t}" for t in recent_ar[:20]) or "لا يوجد"
 
-    system = "أنت محرر أخبار متمرس. مهمتك تصفية صارمة. أجب بـ JSON فقط."
+    system = "أنت محرر أخبار متخصص في 4 مجالات: شرق أوسط، تقنية، اقتصاد، صحة. أجب بـ JSON فقط."
     user = (
-        f"من {len(items)} خبر، اختر فقط ما يستحق النشر عالمياً:\n\n"
+        f"من {len(items)} خبر، اختر أهم 5-12 خبراً ينتمي لإحدى هذه الفئات فقط:\n\n"
+        "🌍 شرق أوسط: أي خبر يخص دول المنطقة (سياسة، حروب، اتفاقيات، قرارات)\n"
+        "💻 تقنية: ذكاء اصطناعي، شركات تقنية كبرى، اختراعات مؤثرة، اختراقات أمنية\n"
+        "📈 اقتصاد: قرارات كبرى (فائدة، نفط، تجارة دولية)، أزمات اقتصادية، اتفاقيات تجارية\n"
+        "🏥 صحة: أوبئة، لقاحات، اكتشافات طبية مهمة، تحذيرات منظمة الصحة العالمية\n\n"
         f"{headlines}\n\n"
         f"سبق نشره (لا تكرر):\n{recent_s}\n\n"
-        "معيار القبول الوحيد: هل يؤثر هذا الخبر على ملايين الناس؟\n"
-        "✅ اقبل: حرب، هجوم، كارثة، قرار سياسي دولي، اتفاقية، اقتصاد دولي كبير، تقنية مؤثرة\n"
-        "❌ ارفض: رياضة، تشريعات محلية، بيانات بورصة صغيرة، إثارة وتهويل، أخبار شركات محدودة\n\n"
-        "اختر 5 إلى 12 فقط من الأفضل. إذا لم يوجد ما يكفي فاختر أقل.\n"
-        "الترجمة: جملة قصيرة ومباشرة بالعربية الواضحة — لا ترجمة حرفية.\n\n"
-        '{"items":[{"rank":1,"title_ar":"عنوان","source":"المصدر","is_breaking":false}]}'
+        "❌ ارفض تماماً: رياضة، سياسة محلية أمريكية/أوروبية، بيانات بورصة تفصيلية، أخبار إثارة\n\n"
+        "الترجمة: جملة قصيرة وواضحة بالعربية — لا ترجمة حرفية\n"
+        "أضف emoji مناسب في بداية العنوان: 🌍 للشرق أوسط، 💻 للتقنية، 📈 للاقتصاد، 🏥 للصحة\n\n"
+        '{"items":[{"rank":1,"title_ar":"💻 عنوان","source":"المصدر","is_breaking":false}]}'
     )
 
     res = call_ai(system, user, max_tokens=1500)
@@ -447,6 +495,7 @@ def fetch_all() -> list[dict]:
                     "title":  title,
                     "source": src["name"],
                     "age":    age,
+                    "cat":    src.get("cat", ""),
                 })
         except Exception as ex:
             logging.warning(f"RSS [{src['name']}]: {ex}")
@@ -521,7 +570,14 @@ def collect_cycle():
         if is_url_seen(item["url"]):
             continue
 
-        tl             = item["title"].lower()
+        # ── فلتر الفئات: قبل AI نتأكد أن الخبر في نطاقنا ──
+        tl  = item["title"].lower()
+        cat = item.get("cat", "")
+        # قبول مباشر إذا المصدر مصنّف + قبول إذا الكلمات المفتاحية موجودة
+        in_scope = (cat in ("mideast","tech","economy","health")) or                    any(kw in tl for kw in ALL_KW)
+        if not in_scope:
+            continue   # تجاهل الخبر خارج النطاق
+
         looks_breaking = any(kw in tl for kw in BREAKING_KW)
 
         if looks_breaking:
