@@ -493,17 +493,27 @@ def fmt_breaking(title_ar: str, source: str) -> str:
         f"— {source}"
     )
 
+# أسماء الأيام والأشهر بالعربية
+DAYS_AR   = ["الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"]
+MONTHS_AR = ["يناير","فبراير","مارس","أبريل","مايو","يونيو",
+             "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"]
+
 def fmt_digest(items: list[dict]) -> str:
-    now_utc = datetime.now(timezone.utc)
-    # تحويل لتوقيت السعودية (UTC+3)
-    now_ksa  = now_utc + timedelta(hours=3)
-    time_str = now_ksa.strftime("%I:%M %p")
-    date_str = now_ksa.strftime("%d %b %Y")
+    now_mecca = datetime.now(timezone.utc) + timedelta(hours=3)
+    day_ar    = DAYS_AR[now_mecca.weekday()]
+    month_ar  = MONTHS_AR[now_mecca.month - 1]
+    date_str  = f"{day_ar} {now_mecca.day} {month_ar} {now_mecca.year}"
+    # تحويل الساعة لـ 12h عربي
+    h  = now_mecca.hour
+    m  = now_mecca.strftime("%M")
+    ap = "صباحاً" if h < 12 else "مساءً"
+    h12 = h % 12 or 12
+    time_str = f"{h12}:{m} {ap}"
 
     lines = [
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"📰 <b>أهم أخبار العالم</b>",
-        f"🕐 {date_str}  |  {time_str}",
+        f"🗞 <b>هاك الأخبار</b>",
+        f"🕌 {date_str}",
+        f"🕐 {time_str} — بتوقيت مكة المكرمة",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
     ]
