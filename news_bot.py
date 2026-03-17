@@ -546,6 +546,17 @@ def home():
 def health():
     return "OK", 200
 
+@flask_app.route("/trigger")
+def trigger():
+    """تشغيل فوري للدورتين — للاختبار"""
+    import threading
+    def run():
+        collect_cycle()
+        import time; time.sleep(5)
+        digest_cycle()
+    threading.Thread(target=run, daemon=True).start()
+    return "🚀 تم تشغيل Collect + Digest — انتظر 30 ثانية", 200
+
 @flask_app.route("/stats")
 def stats():
     conn = get_db()
