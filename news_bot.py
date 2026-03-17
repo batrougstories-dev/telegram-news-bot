@@ -779,6 +779,36 @@ def debug_fetch():
         "fetch_all_result": len(fetch_all()),
     }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
 
+
+@flask_app.route("/test-fetch")
+def test_one_fetch():
+    """اختبار fetch_all على مصدر واحد فقط"""
+    import feedparser as _fp
+    src = SOURCES[0]  # الجزيرة
+    hdr = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/4.0)"}
+    result = {"source": src["name"], "url": src["url"], "items": []}
+    try:
+        r    = requests.get(src["url"], headers=hdr, timeout=12)
+        feed = _fp.parse(r.content)
+        result["http_status"] = r.status_code
+        result["raw_entries"] = len(feed.entries)
+        for e in feed.entries[:10]:
+            url   = getattr(e, "link", "").strip()
+            title = clean_title(getattr(e, "title", ""))
+            age   = get_age_min(e)
+            seen  = is_url_seen(url) if url else None
+            result["items"].append({
+                "url_ok": bool(url),
+                "title_ok": bool(title),
+                "age": age,
+                "age_ok": age is None or age <= NEWS_MAX_AGE,
+                "seen": seen,
+                "title": title[:60],
+            })
+    except Exception as ex:
+        result["error"] = str(ex)
+    return json.dumps(result, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
+
 @flask_app.route("/stats")
 def stats():
     conn = get_db()
