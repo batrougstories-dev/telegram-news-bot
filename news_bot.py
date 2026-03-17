@@ -605,22 +605,24 @@ def collect_cycle():
         if is_url_seen(item["url"]):
             continue
 
-        # ── فلتر الفئات: قبل AI نتأكد أن الخبر في نطاقنا ──
         tl  = item["title"].lower()
         cat = item.get("cat", "")
-        # قبول مباشر إذا المصدر مصنّف + قبول إذا الكلمات المفتاحية موجودة
-        in_scope = (cat in ("mideast","tech","economy","health")) or                    any(kw in tl for kw in ALL_KW)
+
+        # ❌ رفض فوري: رياضة، ترفيه، أخبار تافهة
+        if any(kw in tl for kw in BLACKLIST_KW):
+            continue
+
+        # ✅ قبول: المصدر مصنّف أو تحتوي على كلمات مفتاحية
+        in_scope = (cat in ("mideast", "tech", "economy", "health")) or                    any(kw in tl for kw in ALL_KW)
         if not in_scope:
-            continue   # تجاهل الخبر خارج النطاق
+            continue
 
         looks_breaking = any(kw in tl for kw in BREAKING_KW)
 
         if looks_breaking:
-            # سؤال AI سريع للتأكيد
             res        = ai_check_breaking(item["title"], item["source"])
             importance = res.get("importance", 0)
             confirmed  = res.get("is_breaking", False) and importance >= 9
-
             if confirmed:
                 title_ar = res["title_ar"]
                 save_raw(item["url"], item["title"], item["source"], is_breaking=1)
@@ -634,8 +636,7 @@ def collect_cycle():
         save_raw(item["url"], item["title"], item["source"])
         new += 1
 
-    logging.info(f"  ✅ جديد: {new} | عاجل مُرسل: {brk} | إجمالي الجلسة: {len(all_items)}")
-
+    logging.info(f"  ✅ جديد: {new} | عاجل: {brk} | إجمالي: {len(all_items)}")
 
 def digest_cycle():
     """كل 30 دقيقة — AI يختار أهم 12-22 ويرسل موجزاً"""
