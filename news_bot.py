@@ -29,7 +29,7 @@ DB_FILE      = "/tmp/news.db"
 PORT         = int(os.environ.get("PORT", 10000))
 
 # GitHub AI (GPT-4o-mini) — للتحليل والاختيار
-AI_MODEL    = "gpt-4o-mini"
+AI_MODEL    = "Meta-Llama-3.1-405B-Instruct"
 AI_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
 
 # Google Gemini — لكتابة التغريدات بالعامية
