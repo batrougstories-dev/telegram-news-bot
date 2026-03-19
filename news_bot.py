@@ -506,6 +506,13 @@ def stats():
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
 
+
+@app.route("/add/<int:chat_id>")
+def add_chat(chat_id):
+    """إضافة قناة يدوياً"""
+    add_channel(chat_id, f"manual-{chat_id}")
+    return json.dumps({"ok": True, "chat_id": chat_id}), 200, {"Content-Type": "application/json"}
+
 @app.route("/channels")
 def list_channels():
     conn  = sqlite3.connect(DB_PATH)
