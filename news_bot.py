@@ -192,7 +192,7 @@ def remove_channel(chat_id: int):
 # ──────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────
-def get_age_min(entry) -> int | None:
+def get_age_min(entry):
     pub = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
     if not pub:
         return None
@@ -294,7 +294,7 @@ def tg_poll():
 # ──────────────────────────────────────────────
 # AI - ترجمة وفلترة
 # ──────────────────────────────────────────────
-def ai_process(title_en: str, source: str) -> dict | None:
+def ai_process(title_en: str, source: str):
     prompt = f"""أنت محرر أخبار عربي محترف. حلّل هذا العنوان الإنجليزي:
 
 "{title_en}"
