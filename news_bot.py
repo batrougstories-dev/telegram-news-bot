@@ -136,7 +136,7 @@ def init_db():
     conn.close()
     logging.info("✅ DB جاهزة")
 
-def is_seen(url: str) -> bool:
+def is_seen(url):
     try:
         conn = sqlite3.connect(DB_PATH)
         row  = conn.execute("SELECT 1 FROM seen_news WHERE url=? LIMIT 1", (url,)).fetchone()
@@ -145,7 +145,7 @@ def is_seen(url: str) -> bool:
     except:
         return False
 
-def mark_seen(url: str, title: str, source: str):
+def mark_seen(url, title, source):
     try:
         now  = datetime.now(MECCA_TZ).strftime("%Y-%m-%d %H:%M")
         conn = sqlite3.connect(DB_PATH)
@@ -158,7 +158,7 @@ def mark_seen(url: str, title: str, source: str):
     except Exception as e:
         logging.warning(f"mark_seen error: {e}")
 
-def get_channels() -> list[int]:
+def get_channels():
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute("SELECT chat_id FROM channels").fetchall()
@@ -167,7 +167,7 @@ def get_channels() -> list[int]:
     except:
         return []
 
-def add_channel(chat_id: int, title: str = ""):
+def add_channel(chat_id, title=""):
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
@@ -180,7 +180,7 @@ def add_channel(chat_id: int, title: str = ""):
     except Exception as e:
         logging.warning(f"add_channel error: {e}")
 
-def remove_channel(chat_id: int):
+def remove_channel(chat_id):
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute("DELETE FROM channels WHERE chat_id=?", (chat_id,))
@@ -202,7 +202,7 @@ def get_age_min(entry):
     except:
         return None
 
-def clean_title(t: str) -> str:
+def clean_title(t):
     if not t:
         return ""
     t = html_lib.unescape(t)
@@ -215,7 +215,7 @@ def clean_title(t: str) -> str:
 # ──────────────────────────────────────────────
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-def tg_send(chat_id: int, text: str):
+def tg_send(chat_id, text):
     try:
         r = requests.post(
             f"{TG_API}/sendMessage",
@@ -232,7 +232,7 @@ def tg_send(chat_id: int, text: str):
     except Exception as e:
         logging.warning(f"tg_send error [{chat_id}]: {e}")
 
-def send_to_all(text: str):
+def send_to_all(text):
     for cid in get_channels():
         tg_send(cid, text)
         time.sleep(0.5)
@@ -294,7 +294,7 @@ def tg_poll():
 # ──────────────────────────────────────────────
 # AI - ترجمة وفلترة
 # ──────────────────────────────────────────────
-def ai_process(title_en: str, source: str):
+def ai_process(title_en, source):
     prompt = f"""أنت محرر أخبار عربي محترف. حلّل هذا العنوان الإنجليزي:
 
 "{title_en}"
@@ -342,7 +342,7 @@ def ai_process(title_en: str, source: str):
 # ──────────────────────────────────────────────
 # تنسيق الرسالة
 # ──────────────────────────────────────────────
-def fmt_news(title_ar: str, emoji: str, source: str, url: str) -> str:
+def fmt_news(title_ar, emoji, source, url):
     now      = datetime.now(MECCA_TZ)
     time_str = now.strftime("%H:%M")
     date_str = now.strftime("%d/%m/%Y")
