@@ -517,16 +517,17 @@ def list_channels():
 # ──────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────
-if __name__ == "__main__":
+# ── تشغيل عند الاستيراد (gunicorn + __main__) ──
+def _startup():
     init_db()
+    threading.Thread(target=tg_poll,   daemon=True, name="tg-poll").start()
+    threading.Thread(target=scheduler, daemon=True, name="scheduler").start()
+    threading.Thread(target=self_ping, daemon=True, name="self-ping").start()
+    logging.info("🚀 Bot v5.0 جاهز")
 
-    # Telegram polling
-    threading.Thread(target=tg_poll,    daemon=True, name="tg-poll").start()
-    # News scheduler
-    threading.Thread(target=scheduler,  daemon=True, name="scheduler").start()
-    # Self-ping
-    threading.Thread(target=self_ping,  daemon=True, name="self-ping").start()
+# يعمل مع gunicorn (import) وأيضاً مع python مباشرة
+_startup()
 
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    logging.info(f"🚀 Bot v5.0 | منفذ: {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
