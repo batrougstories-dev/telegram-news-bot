@@ -517,16 +517,26 @@ def list_channels():
 # ──────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────
-# ── تشغيل عند الاستيراد (gunicorn + __main__) ──
+# ──────────────────────────────────────────────
+# Startup
+# ──────────────────────────────────────────────
+_started = threading.Event()
+
 def _startup():
-    init_db()
+    """يعمل مع تأخير 10 ثوانٍ حتى يصبح Flask جاهزاً"""
+    time.sleep(10)
+    try:
+        init_db()
+    except Exception as e:
+        logging.error(f"init_db error: {e}")
     threading.Thread(target=tg_poll,   daemon=True, name="tg-poll").start()
     threading.Thread(target=scheduler, daemon=True, name="scheduler").start()
     threading.Thread(target=self_ping, daemon=True, name="self-ping").start()
+    _started.set()
     logging.info("🚀 Bot v5.0 جاهز")
 
-# يعمل مع gunicorn (import) وأيضاً مع python مباشرة
-_startup()
+# ابدأ startup في خلفية — Flask يعمل فوراً
+threading.Thread(target=_startup, daemon=True, name="startup").start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
