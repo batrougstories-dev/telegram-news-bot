@@ -29,7 +29,7 @@ GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 RENDER_URL   = os.environ.get("RENDER_EXTERNAL_URL", "")
 DB_PATH      = "/tmp/newsbot.db"
 CHECK_EVERY  = 5 * 60      # كل 5 دقائق
-NEWS_MAX_AGE = 120          # آخر ساعتين فقط
+NEWS_MAX_AGE = 360          # آخر 6 ساعات
 MECCA_TZ     = timezone(timedelta(hours=3))
 
 # ──────────────────────────────────────────────
@@ -508,10 +508,23 @@ def stats():
 
 
 @app.route("/add/<int:chat_id>")
-def add_chat(chat_id):
+def add_chat_route(chat_id):
     """إضافة قناة يدوياً"""
     add_channel(chat_id, f"manual-{chat_id}")
     return json.dumps({"ok": True, "chat_id": chat_id}), 200, {"Content-Type": "application/json"}
+
+@app.route("/reset-news")
+def reset_news():
+    """مسح سجل الأخبار لإعادة معالجتها"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        count = conn.execute("SELECT COUNT(*) FROM seen_news").fetchone()[0]
+        conn.execute("DELETE FROM seen_news")
+        conn.commit()
+        conn.close()
+        return json.dumps({"ok": True, "deleted": count}), 200, {"Content-Type": "application/json"}
+    except Exception as e:
+        return json.dumps({"error": str(e)}), 500
 
 @app.route("/channels")
 def list_channels():
