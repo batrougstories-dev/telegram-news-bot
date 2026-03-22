@@ -25,6 +25,8 @@ logging.basicConfig(
 # ──────────────────────────────────────────────
 BOT_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["BOT_TOKEN"]
 RENDER_URL  = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+# Chat ID الافتراضي — البوت يُرسل هنا تلقائياً بدون أي إعداد
+DEFAULT_CHAT = int(os.environ.get("DEFAULT_CHAT_ID", "0"))
 DB_PATH     = "/tmp/newsbot.db"
 CHECK_EVERY = 5 * 60       # كل 5 دقائق
 NEWS_MAX_AGE = 360          # آخر 6 ساعات
@@ -540,6 +542,10 @@ def reset_db():
 def _startup():
     time.sleep(3)   # انتظر حتى يبدأ Flask
     init_db()
+    # أضف DEFAULT_CHAT تلقائياً عند كل تشغيل
+    if DEFAULT_CHAT:
+        add_channel(DEFAULT_CHAT, "default")
+        logging.info(f"📌 Default chat مضاف: {DEFAULT_CHAT}")
     threading.Thread(target=tg_poll,   daemon=True, name="tg-poll").start()
     threading.Thread(target=scheduler, daemon=True, name="scheduler").start()
     threading.Thread(target=self_ping, daemon=True, name="self-ping").start()
