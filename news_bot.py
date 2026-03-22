@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Breaking News Bot v5.0
-- مصادر غربية فقط
-- إرسال فوري (بدون موجز)
-- ترجمة AI بـ Llama 3.1 405B
-- الشرق الأوسط + التقنية
+Breaking News Bot v6.0
+- Google Translate مجاني (بدون مفتاح)
+- فلترة بالكلمات المفتاحية فقط (سريع وموثوق)
+- تشغيل مستمر مع self-ping كل 5 دقائق
 """
 
-import os, json, logging, sqlite3, re, time, html as html_lib, threading
+import os, json, logging, sqlite3, re, time, html as html_lib, threading, urllib.parse
 from datetime import datetime, timezone, timedelta
 import feedparser, requests
 from flask import Flask
@@ -24,94 +23,100 @@ logging.basicConfig(
 # ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
-BOT_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["BOT_TOKEN"]
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-RENDER_URL   = os.environ.get("RENDER_EXTERNAL_URL", "")
-DB_PATH      = "/tmp/newsbot.db"
-CHECK_EVERY  = 5 * 60      # كل 5 دقائق
+BOT_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ["BOT_TOKEN"]
+RENDER_URL  = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+DB_PATH     = "/tmp/newsbot.db"
+CHECK_EVERY = 5 * 60       # كل 5 دقائق
 NEWS_MAX_AGE = 360          # آخر 6 ساعات
-MECCA_TZ     = timezone(timedelta(hours=3))
+MECCA_TZ    = timezone(timedelta(hours=3))
 
 # ──────────────────────────────────────────────
-# AI
-# ──────────────────────────────────────────────
-AI_ENDPOINT = "https://models.inference.ai.azure.com"
-AI_MODEL    = "Meta-Llama-3.1-405B-Instruct"
-
-# ──────────────────────────────────────────────
-# مصادر غربية فقط
+# مصادر غربية موثوقة فقط
 # ──────────────────────────────────────────────
 SOURCES = [
-    # 🌍 عالمية / شرق أوسط
-    {"name": "Reuters World",   "url": "https://feeds.reuters.com/reuters/worldNews",              "cat": "world"},
-    {"name": "BBC World",       "url": "https://feeds.bbci.co.uk/news/world/rss.xml",              "cat": "world"},
-    {"name": "BBC Middle East", "url": "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",  "cat": "mideast"},
-    {"name": "Al Jazeera EN",   "url": "https://www.aljazeera.com/xml/rss/all.xml",               "cat": "world"},
-    {"name": "Guardian World",  "url": "https://www.theguardian.com/world/rss",                   "cat": "world"},
-    {"name": "AP News",         "url": "https://feeds.apnews.com/rss/apf-topnews",                "cat": "world"},
-    {"name": "CNN World",       "url": "http://rss.cnn.com/rss/edition_world.rss",                "cat": "world"},
-    {"name": "France24 EN",     "url": "https://www.france24.com/en/rss",                         "cat": "world"},
+    # 🌍 أخبار عالمية وشرق أوسط
+    {"name": "BBC World",       "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
+    {"name": "BBC Middle East", "url": "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml"},
+    {"name": "Al Jazeera EN",   "url": "https://www.aljazeera.com/xml/rss/all.xml"},
+    {"name": "Reuters",         "url": "https://feeds.reuters.com/reuters/worldNews"},
+    {"name": "AP News",         "url": "https://feeds.apnews.com/rss/apf-topnews"},
+    {"name": "Guardian World",  "url": "https://www.theguardian.com/world/rss"},
+    {"name": "France24 EN",     "url": "https://www.france24.com/en/rss"},
     # 💻 تقنية
-    {"name": "TechCrunch",      "url": "https://techcrunch.com/feed/",                            "cat": "tech"},
-    {"name": "The Verge",       "url": "https://www.theverge.com/rss/index.xml",                  "cat": "tech"},
-    {"name": "Ars Technica",    "url": "https://feeds.arstechnica.com/arstechnica/index",          "cat": "tech"},
-    {"name": "Wired",           "url": "https://www.wired.com/feed/rss",                          "cat": "tech"},
+    {"name": "TechCrunch",      "url": "https://techcrunch.com/feed/"},
+    {"name": "The Verge",       "url": "https://www.theverge.com/rss/index.xml"},
+    {"name": "Ars Technica",    "url": "https://feeds.arstechnica.com/arstechnica/index"},
+    {"name": "Wired",           "url": "https://www.wired.com/feed/rss"},
 ]
 
 # ──────────────────────────────────────────────
-# كلمات مفتاحية
+# كلمات مفتاحية — شرق أوسط + تقنية
 # ──────────────────────────────────────────────
-MIDEAST_KW = [
-    "saudi", "arabia", "riyadh", "jeddah", "ksa",
+ACCEPT_KW = [
+    # دول الشرق الأوسط
+    "saudi", "arabia", "riyadh", "jeddah",
     "kuwait",
     "uae", "emirates", "dubai", "abu dhabi",
     "bahrain",
-    "egypt", "cairo", "egyptian",
-    "yemen", "sanaa", "houthi",
-    "iraq", "baghdad", "iraqi",
+    "egypt", "cairo",
+    "yemen", "houthi",
+    "iraq", "baghdad",
     "iran", "tehran", "iranian",
-    "pakistan", "islamabad", "karachi", "pakistani",
-    "india", "delhi", "mumbai", "modi", "indian",
+    "pakistan", "islamabad",
+    "india", "delhi", "modi",
     "afghanistan", "kabul", "taliban",
-    "china", "beijing", "xi jinping", "chinese",
-    "israel", "gaza", "palestine", "west bank", "hamas", "netanyahu",
+    "china", "beijing", "xi jinping",
+    "israel", "gaza", "palestine", "hamas", "netanyahu",
     "lebanon", "beirut", "hezbollah",
-    "syria", "damascus", "syrian",
-    "jordan", "amman",
-    "middle east", "persian gulf", "gulf state",
-    "red sea", "strait of hormuz",
+    "syria", "damascus",
+    "middle east", "persian gulf", "red sea", "gulf state",
     "opec", "oil price", "crude oil",
+    # تقنية
+    "artificial intelligence", " ai ", "chatgpt", "openai",
+    "google", "microsoft", "apple", "meta ", "nvidia",
+    "cybersecurity", "cyber attack", "data breach", "hack",
+    "semiconductor", "chip",
+    "spacex", "nasa",
+    "robot", "automation",
+    "electric vehicle", " ev ", "tesla",
+    "tech giant", "silicon valley",
 ]
 
-TECH_KW = [
-    "artificial intelligence", " ai ", "chatgpt", "openai", "gemini",
-    "machine learning", "deep learning", "neural",
-    "google", "microsoft", "apple", "meta ", "nvidia", "amazon",
-    "semiconductor", "chip", "microchip",
-    "cybersecurity", "cyber attack", "hack", "data breach",
-    "robot", "automation", "autonomous",
-    "5g", "6g", "satellite",
-    "spacex", "nasa", "space mission",
-    "electric vehicle", "ev ", "tesla",
-    "iphone", "android", "smartphone",
-    "quantum", "blockchain", "crypto",
-    "tech giant", "silicon valley", "startup",
-]
-
-ALL_KW = MIDEAST_KW + TECH_KW
-
-BLACKLIST_KW = [
-    "sport", "football", "soccer", "basketball", "tennis", "golf",
+REJECT_KW = [
+    "football", "soccer", "basketball", "tennis", "golf", "cricket",
     "nba", "nfl", "premier league", "champions league", "world cup",
-    "oscar", "grammy", "celebrity", "actor", "actress", "singer",
-    "fashion", "beauty", "makeup", "skincare",
-    "recipe", "cooking", "food review",
+    "oscar", "grammy", "celebrity", "actor", "singer", "musician",
+    "fashion", "makeup", "skincare", "beauty tip",
+    "recipe", "cooking", "restaurant",
     "horoscope", "zodiac",
-    "lottery", "casino",
     "dating", "romance",
-    "pet ", "dog ", "cat ",
-    "movie review", "tv show", "netflix series",
+    "movie review", "tv show", "netflix", "disney+",
+    "lottery", "casino",
 ]
+
+# ──────────────────────────────────────────────
+# Google Translate (مجاني - بدون API key)
+# ──────────────────────────────────────────────
+def google_translate(text):
+    """ترجمة فورية مجانية عبر Google"""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl":     "en",
+            "tl":     "ar",
+            "dt":     "t",
+            "q":      text,
+        }
+        r = requests.get(url, params=params, timeout=10,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        # نجمع كل أجزاء الترجمة
+        translated = "".join(part[0] for part in data[0] if part[0])
+        return translated.strip()
+    except Exception as e:
+        logging.warning(f"translate error: {e}")
+        return None
 
 # ──────────────────────────────────────────────
 # Database
@@ -121,15 +126,17 @@ def init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_news (
             url      TEXT PRIMARY KEY,
-            title    TEXT,
+            title_ar TEXT,
             source   TEXT,
-            sent_at  TEXT
+            sent     INTEGER DEFAULT 0,
+            saved_at TEXT
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS channels (
             chat_id  INTEGER PRIMARY KEY,
-            title    TEXT
+            title    TEXT,
+            added_at TEXT
         )
     """)
     conn.commit()
@@ -145,18 +152,18 @@ def is_seen(url):
     except:
         return False
 
-def mark_seen(url, title, source):
+def mark_seen(url, title_ar, source, sent=0):
     try:
         now  = datetime.now(MECCA_TZ).strftime("%Y-%m-%d %H:%M")
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
-            "INSERT OR IGNORE INTO seen_news(url,title,source,sent_at) VALUES(?,?,?,?)",
-            (url, title, source, now),
+            "INSERT OR IGNORE INTO seen_news(url,title_ar,source,sent,saved_at) VALUES(?,?,?,?,?)",
+            (url, title_ar, source, sent, now),
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.warning(f"mark_seen error: {e}")
+        logging.warning(f"mark_seen: {e}")
 
 def get_channels():
     try:
@@ -169,16 +176,17 @@ def get_channels():
 
 def add_channel(chat_id, title=""):
     try:
+        now  = datetime.now(MECCA_TZ).strftime("%Y-%m-%d %H:%M")
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
-            "INSERT OR IGNORE INTO channels(chat_id,title) VALUES(?,?)",
-            (chat_id, title),
+            "INSERT OR IGNORE INTO channels(chat_id,title,added_at) VALUES(?,?,?)",
+            (chat_id, title, now),
         )
         conn.commit()
         conn.close()
-        logging.info(f"➕ قناة مضافة: {title} ({chat_id})")
+        logging.info(f"➕ قناة: {title} ({chat_id})")
     except Exception as e:
-        logging.warning(f"add_channel error: {e}")
+        logging.warning(f"add_channel: {e}")
 
 def remove_channel(chat_id):
     try:
@@ -210,8 +218,29 @@ def clean_title(t):
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
+def is_relevant(title):
+    """فلترة بالكلمات المفتاحية فقط — سريع وموثوق"""
+    tl = title.lower()
+    if any(kw in tl for kw in REJECT_KW):
+        return False
+    return any(kw in tl for kw in ACCEPT_KW)
+
+def pick_emoji(title, source):
+    tl = title.lower()
+    if any(w in tl for w in ["attack","war","strike","bomb","kill","dead","missile","explosion"]):
+        return "⚠️"
+    if any(w in tl for w in ["ceasefire","deal","agreement","peace","talks","negotiat"]):
+        return "🕊️"
+    if any(w in tl for w in ["ai","artificial intelligence","chip","tech","robot","cyber","hack","software"]):
+        return "💻"
+    if any(w in tl for w in ["oil","opec","economy","market","gdp","inflation","trade"]):
+        return "💰"
+    if any(w in tl for w in ["earthquake","flood","fire","disaster","storm"]):
+        return "🚨"
+    return "🔴"
+
 # ──────────────────────────────────────────────
-# Telegram - إرسال مباشر عبر HTTP
+# Telegram
 # ──────────────────────────────────────────────
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -220,247 +249,210 @@ def tg_send(chat_id, text):
         r = requests.post(
             f"{TG_API}/sendMessage",
             json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
+                "chat_id":                  chat_id,
+                "text":                     text,
+                "parse_mode":               "HTML",
                 "disable_web_page_preview": True,
             },
             timeout=10,
         )
-        if not r.ok:
-            logging.warning(f"TG [{chat_id}]: {r.json().get('description','?')}")
+        d = r.json()
+        if not d.get("ok"):
+            err = d.get("description", "?")
+            logging.warning(f"TG [{chat_id}]: {err}")
+            # إذا حُذف البوت من القناة
+            if "blocked" in err or "not found" in err or "kicked" in err:
+                remove_channel(chat_id)
     except Exception as e:
-        logging.warning(f"tg_send error [{chat_id}]: {e}")
+        logging.warning(f"tg_send [{chat_id}]: {e}")
 
 def send_to_all(text):
-    for cid in get_channels():
+    chats = get_channels()
+    if not chats:
+        logging.info("⚠️ لا توجد قنوات مسجلة")
+        return
+    for cid in chats:
         tg_send(cid, text)
-        time.sleep(0.5)
+        time.sleep(0.3)
+
+def fmt_news(title_ar, emoji, source, url):
+    now = datetime.now(MECCA_TZ)
+    return (
+        f"{emoji} <b>{title_ar}</b>\n\n"
+        f"📰 {source}\n"
+        f'🔗 <a href="{url}">اقرأ التفاصيل</a>\n'
+        f"🕐 {now.strftime('%H:%M')}  {now.strftime('%d/%m/%Y')}"
+    )
 
 # ──────────────────────────────────────────────
-# Telegram Polling (للقنوات الجديدة)
+# Telegram Polling
 # ──────────────────────────────────────────────
 _tg_offset = 0
 
 def tg_poll():
     global _tg_offset
+    logging.info("🤖 Telegram polling بدأ")
     while True:
         try:
             r = requests.get(
                 f"{TG_API}/getUpdates",
-                params={"offset": _tg_offset, "timeout": 30, "allowed_updates": '["message","my_chat_member"]'},
-                timeout=40,
+                params={
+                    "offset":           _tg_offset,
+                    "timeout":          25,
+                    "allowed_updates":  '["message","my_chat_member"]',
+                },
+                timeout=35,
             )
             if not r.ok:
                 time.sleep(5)
                 continue
-            updates = r.json().get("result", [])
-            for u in updates:
+            for u in r.json().get("result", []):
                 _tg_offset = u["update_id"] + 1
-
-                # إضافة قناة عند إضافة البوت
-                if "my_chat_member" in u:
-                    mc     = u["my_chat_member"]
-                    chat   = mc["chat"]
-                    status = mc["new_chat_member"]["status"]
-                    if status in ("member", "administrator"):
-                        add_channel(chat["id"], chat.get("title", str(chat["id"])))
-                        tg_send(chat["id"],
-                            "✅ <b>تم تفعيل البوت!</b>\n"
-                            "سأرسل لك الأخبار العاجلة فور صدورها 🔴\n\n"
-                            "المواضيع: الشرق الأوسط 🌍 | التقنية 💻"
-                        )
-                    elif status in ("left", "kicked"):
-                        remove_channel(chat["id"])
-
-                # /start في الخاص أو مجموعة
-                if "message" in u:
-                    msg  = u["message"]
-                    text = msg.get("text", "")
-                    chat = msg.get("chat", {})
-                    if text.startswith("/start"):
-                        add_channel(chat["id"], chat.get("title") or chat.get("first_name", ""))
-                        tg_send(chat["id"],
-                            "✅ <b>مرحباً!</b>\n"
-                            "سأرسل لك الأخبار العاجلة فور صدورها 🔴\n\n"
-                            "📌 المواضيع:\n"
-                            "🌍 الشرق الأوسط (السعودية، الكويت، الإمارات، البحرين، مصر، اليمن، العراق، إيران، باكستان، الهند، أفغانستان، الصين)\n"
-                            "💻 التقنية والذكاء الاصطناعي"
-                        )
+                _handle_update(u)
         except Exception as e:
-            logging.warning(f"tg_poll error: {e}")
+            logging.warning(f"tg_poll: {e}")
             time.sleep(5)
 
-# ──────────────────────────────────────────────
-# AI - ترجمة وفلترة
-# ──────────────────────────────────────────────
-def ai_process(title_en, source):
-    prompt = f"""أنت محرر أخبار عربي محترف. حلّل هذا العنوان الإنجليزي:
-
-"{title_en}"
-المصدر: {source}
-
-قرر:
-1. هل الخبر يخص أياً من هذه المواضيع؟
-   أ) دول: السعودية، الكويت، الإمارات، البحرين، مصر، اليمن، العراق، إيران، باكستان، الهند، أفغانستان، الصين، إسرائيل، غزة، لبنان، سوريا، الخليج العربي
-   ب) التقنية: ذكاء اصطناعي، أمن سيبراني، شركات تقنية كبرى، فضاء
-
-2. إذا كان ذا صلة: ترجم العنوان للعربية الفصحى البسيطة بشكل طبيعي وغير حرفي.
-   اختر إيموجي مناسب: 🔴 (سياسي/أمني) | 💰 (اقتصادي) | 💻 (تقني) | ⚠️ (طوارئ) | 🌐 (دولي)
-
-❌ ارفض: الرياضة، الترفيه، المحليات التافهة، الطقس، الطعام، الوصفات
-
-أجب بـ JSON فقط بدون شرح:
-{{"relevant": true, "title_ar": "العنوان بالعربية", "emoji": "🔴"}}
-أو:
-{{"relevant": false}}"""
-
-    try:
-        r = requests.post(
-            f"{AI_ENDPOINT}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GITHUB_TOKEN}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model": AI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens":  200,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=25,
-        )
-        raw = r.json()["choices"][0]["message"]["content"].strip()
-        m   = re.search(r"\{.*?\}", raw, re.DOTALL)
-        if m:
-            return json.loads(m.group())
-    except Exception as e:
-        logging.warning(f"AI error: {e}")
-    return None
-
-# ──────────────────────────────────────────────
-# تنسيق الرسالة
-# ──────────────────────────────────────────────
-def fmt_news(title_ar, emoji, source, url):
-    now      = datetime.now(MECCA_TZ)
-    time_str = now.strftime("%H:%M")
-    date_str = now.strftime("%d/%m/%Y")
-    return (
-        f"{emoji} <b>{title_ar}</b>\n\n"
-        f"📰 {source}\n"
-        f"🕐 {time_str} | {date_str} (مكة)\n"
-        f'🔗 <a href="{url}">اقرأ المزيد</a>'
-    )
+def _handle_update(u):
+    # إضافة/حذف قناة
+    if "my_chat_member" in u:
+        mc     = u["my_chat_member"]
+        chat   = mc["chat"]
+        status = mc["new_chat_member"]["status"]
+        cid    = chat["id"]
+        title  = chat.get("title") or chat.get("username") or str(cid)
+        if status in ("member", "administrator"):
+            add_channel(cid, title)
+            tg_send(cid,
+                "✅ <b>تم تفعيل البوت!</b>\n\n"
+                "📌 سأرسل الأخبار العاجلة فور صدورها:\n"
+                "🌍 الشرق الأوسط (السعودية، الكويت، الإمارات، إيران، غزة، الهند، الصين...)\n"
+                "💻 التقنية والذكاء الاصطناعي\n\n"
+                "⏱️ يتحقق كل 5 دقائق"
+            )
+        elif status in ("left", "kicked"):
+            remove_channel(cid)
+    # /start في الخاص
+    if "message" in u:
+        msg  = u["message"]
+        text = msg.get("text", "")
+        chat = msg.get("chat", {})
+        if text.startswith("/start"):
+            cid   = chat["id"]
+            title = chat.get("title") or chat.get("first_name") or str(cid)
+            add_channel(cid, title)
+            tg_send(cid,
+                "✅ <b>مرحباً!</b>\n\n"
+                "سأرسل لك الأخبار العاجلة عن:\n"
+                "🌍 الشرق الأوسط والدول المجاورة\n"
+                "💻 التقنية والذكاء الاصطناعي\n\n"
+                "⏱️ يتحقق من الأخبار كل 5 دقائق"
+            )
 
 # ──────────────────────────────────────────────
 # دورة الأخبار الرئيسية
 # ──────────────────────────────────────────────
-_cycle_lock = threading.Lock()
+_cycle_lock  = threading.Lock()
+_stats       = {"processed": 0, "sent": 0, "last_sent": []}
 
 def news_cycle():
     if not _cycle_lock.acquire(blocking=False):
-        logging.info("⏭️ دورة تعمل بالفعل، تخطي")
         return
     try:
         logging.info("🔄 [Cycle] بدء")
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/5.0; +https://github.com)"}
-        sent = 0
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/6.0)"}
+        sent_this_cycle = 0
 
         for src in SOURCES:
             try:
-                r    = requests.get(src["url"], headers=headers, timeout=15)
+                r    = requests.get(src["url"], headers=headers, timeout=12)
                 feed = feedparser.parse(r.content)
-                n    = len(feed.entries)
-                logging.info(f"  📡 {src['name']}: {n} مقالة")
+                new_count = 0
 
-                for entry in feed.entries[:12]:
+                for entry in feed.entries[:15]:
                     url   = getattr(entry, "link", "").strip()
                     title = clean_title(getattr(entry, "title", ""))
 
                     if not url or not title:
                         continue
-
-                    # تجنب التكرار
                     if is_seen(url):
                         continue
 
-                    # فلتر العمر: آخر ساعتين
+                    # فلتر العمر
                     age = get_age_min(entry)
                     if age is not None and age > NEWS_MAX_AGE:
-                        mark_seen(url, title, src["name"])
+                        mark_seen(url, "", src["name"], sent=0)
                         continue
 
-                    tl = title.lower()
-
-                    # ❌ رفض سريع: رياضة/ترفيه
-                    if any(kw in tl for kw in BLACKLIST_KW):
-                        mark_seen(url, title, src["name"])
+                    # فلتر الكلمات المفتاحية
+                    if not is_relevant(title):
+                        mark_seen(url, "", src["name"], sent=0)
                         continue
 
-                    # ✅ تحقق من الصلة بالمواضيع
-                    cat = src["cat"]
-                    in_scope = (cat in ("mideast", "tech")) or \
-                               any(kw in tl for kw in ALL_KW)
-
-                    if not in_scope:
-                        mark_seen(url, title, src["name"])
-                        continue
-
-                    # 🤖 AI: ترجمة + فلترة نهائية
-                    logging.info(f"  🤖 AI يعالج: {title[:60]}")
-                    result = ai_process(title, src["name"])
-                    mark_seen(url, title, src["name"])
-
-                    if not result or not result.get("relevant"):
-                        logging.info(f"  ↩️ AI رفض الخبر")
-                        continue
-
-                    title_ar = result.get("title_ar", "").strip()
-                    emoji    = result.get("emoji", "🔴")
+                    # ترجمة Google
+                    logging.info(f"  🌐 ترجمة: {title[:60]}")
+                    title_ar = google_translate(title)
 
                     if not title_ar:
+                        mark_seen(url, title, src["name"], sent=0)
                         continue
 
-                    # 📤 إرسال
-                    msg = fmt_news(title_ar, emoji, src["name"], url)
+                    emoji = pick_emoji(title, src["name"])
+                    msg   = fmt_news(title_ar, emoji, src["name"], url)
+
                     send_to_all(msg)
-                    sent += 1
-                    logging.info(f"  ✅ أُرسل [{sent}]: {title_ar[:60]}")
-                    time.sleep(3)  # تأخير بين الرسائل لتجنب spam
+                    mark_seen(url, title_ar, src["name"], sent=1)
+                    new_count += 1
+                    sent_this_cycle += 1
+                    _stats["sent"] += 1
+                    _stats["last_sent"].insert(0, {
+                        "title_ar": title_ar[:70],
+                        "source":   src["name"],
+                        "at":       datetime.now(MECCA_TZ).strftime("%H:%M"),
+                    })
+                    _stats["last_sent"] = _stats["last_sent"][:10]
+                    logging.info(f"  ✅ أُرسل: {title_ar[:60]}")
+                    time.sleep(2)
+
+                if new_count:
+                    logging.info(f"  📡 {src['name']}: {new_count} أُرسل")
 
             except Exception as e:
                 logging.warning(f"❌ [{src['name']}]: {e}")
 
-        logging.info(f"🏁 [Cycle] انتهى | أُرسل: {sent}")
+        _stats["processed"] += 1
+        logging.info(f"🏁 [Cycle] أُرسل: {sent_this_cycle}")
     finally:
         _cycle_lock.release()
 
 # ──────────────────────────────────────────────
-# Scheduler
+# Scheduler — يعمل كل 5 دقائق
 # ──────────────────────────────────────────────
 def scheduler():
-    logging.info(f"⏱️ Scheduler: كل {CHECK_EVERY//60} دقائق")
+    logging.info("⏱️ Scheduler بدأ")
     while True:
         try:
             news_cycle()
         except Exception as e:
-            logging.error(f"Scheduler error: {e}")
+            logging.error(f"Scheduler: {e}")
         time.sleep(CHECK_EVERY)
 
 # ──────────────────────────────────────────────
-# Self-Ping (يمنع Render من إيقاف الخادم)
+# Self-Ping — يمنع Render من إيقاف الخادم
 # ──────────────────────────────────────────────
 def self_ping():
+    """يرسل طلب لنفسه كل 5 دقائق لإبقاء الخادم نشطاً"""
     if not RENDER_URL:
+        logging.warning("⚠️ RENDER_EXTERNAL_URL غير محدد — self-ping معطل")
         return
+    logging.info(f"🏓 Self-ping: {RENDER_URL}/health")
     while True:
-        time.sleep(14 * 60)
+        time.sleep(4 * 60)   # كل 4 دقائق (أقل من حد Render البالغ 15 دق)
         try:
-            requests.get(f"{RENDER_URL}/health", timeout=10)
-            logging.info("🏓 self-ping OK")
-        except:
-            pass
+            requests.get(f"{RENDER_URL}/health", timeout=8)
+            logging.info("🏓 ping OK")
+        except Exception as e:
+            logging.warning(f"ping failed: {e}")
 
 # ──────────────────────────────────────────────
 # Flask
@@ -472,11 +464,17 @@ def home():
     try:
         conn  = sqlite3.connect(DB_PATH)
         total = conn.execute("SELECT COUNT(*) FROM seen_news").fetchone()[0]
+        sent  = conn.execute("SELECT COUNT(*) FROM seen_news WHERE sent=1").fetchone()[0]
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         conn.close()
     except:
-        total = chats = 0
-    return f"✅ Breaking News Bot v5.0 | قنوات: {chats} | أخبار معالجة: {total}"
+        total = sent = chats = 0
+    return (
+        f"✅ Breaking News Bot v6.0 | "
+        f"قنوات: {chats} | "
+        f"أُرسل: {sent} | "
+        f"معالجة: {total}"
+    )
 
 @app.route("/health")
 def health():
@@ -485,39 +483,49 @@ def health():
 @app.route("/trigger")
 def trigger():
     threading.Thread(target=news_cycle, daemon=True).start()
-    return "🚀 تم تشغيل الدورة — انتظر دقيقة", 200
+    return "🚀 تم تشغيل الدورة", 200
 
 @app.route("/stats")
 def stats():
     try:
         conn  = sqlite3.connect(DB_PATH)
         total = conn.execute("SELECT COUNT(*) FROM seen_news").fetchone()[0]
+        sent  = conn.execute("SELECT COUNT(*) FROM seen_news WHERE sent=1").fetchone()[0]
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         last5 = conn.execute(
-            "SELECT title, source, sent_at FROM seen_news ORDER BY rowid DESC LIMIT 5"
+            "SELECT title_ar, source, saved_at FROM seen_news WHERE sent=1 ORDER BY rowid DESC LIMIT 5"
         ).fetchall()
         conn.close()
         return json.dumps({
-            "version":   "5.0",
-            "processed": total,
+            "version":   "6.0",
             "channels":  chats,
-            "last_5":    [{"title": r[0][:70], "source": r[1], "at": r[2]} for r in last5],
+            "sent":      sent,
+            "processed": total,
+            "last_sent": [{"title": r[0][:70], "source": r[1], "at": r[2]} for r in last5],
         }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
 
+@app.route("/channels")
+def list_channels():
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT chat_id, title, added_at FROM channels").fetchall()
+    conn.close()
+    return json.dumps(
+        [{"id": r[0], "title": r[1], "added": r[2]} for r in rows],
+        ensure_ascii=False, indent=2
+    ), 200, {"Content-Type": "application/json"}
 
 @app.route("/add/<int:chat_id>")
 def add_chat_route(chat_id):
-    """إضافة قناة يدوياً"""
     add_channel(chat_id, f"manual-{chat_id}")
     return json.dumps({"ok": True, "chat_id": chat_id}), 200, {"Content-Type": "application/json"}
 
-@app.route("/reset-news")
-def reset_news():
-    """مسح سجل الأخبار لإعادة معالجتها"""
+@app.route("/reset")
+def reset_db():
+    """مسح سجل الأخبار — يُعيد المعالجة من جديد"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn  = sqlite3.connect(DB_PATH)
         count = conn.execute("SELECT COUNT(*) FROM seen_news").fetchone()[0]
         conn.execute("DELETE FROM seen_news")
         conn.commit()
@@ -526,38 +534,20 @@ def reset_news():
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
 
-@app.route("/channels")
-def list_channels():
-    conn  = sqlite3.connect(DB_PATH)
-    rows  = conn.execute("SELECT chat_id, title FROM channels").fetchall()
-    conn.close()
-    return json.dumps([{"id": r[0], "title": r[1]} for r in rows],
-                      ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
-
-# ──────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────
 # ──────────────────────────────────────────────
 # Startup
 # ──────────────────────────────────────────────
-_started = threading.Event()
-
 def _startup():
-    """يعمل مع تأخير 10 ثوانٍ حتى يصبح Flask جاهزاً"""
-    time.sleep(10)
-    try:
-        init_db()
-    except Exception as e:
-        logging.error(f"init_db error: {e}")
+    time.sleep(3)   # انتظر حتى يبدأ Flask
+    init_db()
     threading.Thread(target=tg_poll,   daemon=True, name="tg-poll").start()
     threading.Thread(target=scheduler, daemon=True, name="scheduler").start()
     threading.Thread(target=self_ping, daemon=True, name="self-ping").start()
-    _started.set()
-    logging.info("🚀 Bot v5.0 جاهز")
+    logging.info("🚀 Bot v6.0 جاهز — كل المكونات تعمل")
 
-# ابدأ startup في خلفية — Flask يعمل فوراً
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
+    logging.info(f"🌐 Flask على المنفذ {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
