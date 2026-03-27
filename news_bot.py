@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-📚 Novel & Story Summaries Bot v7.0
+📚 Novel & Story Summaries Bot v7.1
 يجلب ملخصات الروايات والقصص من 9 مواقع متخصصة
 ويترجمها للعربية ويرسلها على Telegram
 """
@@ -534,7 +534,7 @@ def home():
     except:
         total = sent = chats = 0
     return (
-        f"📚 Story Bot v7.0 | "
+        f"📚 Story Bot v7.1 | "
         f"قنوات: {chats} | "
         f"أُرسل: {sent} ملخص | "
         f"معالج: {total}"
@@ -561,7 +561,7 @@ def stats():
         ).fetchall()
         conn.close()
         return json.dumps({
-            "version":  "7.0",
+            "version":  "7.1",
             "channels": chats,
             "sent":     sent,
             "seen":     total,
@@ -618,7 +618,7 @@ def _startup():
     threading.Thread(target=tg_poll,    daemon=True, name="poll").start()
     threading.Thread(target=scheduler,  daemon=True, name="sched").start()
     threading.Thread(target=self_ping,  daemon=True, name="ping").start()
-    logging.info("🚀 Story Bot v7.0 جاهز")
+    logging.info("🚀 Story Bot v7.1 جاهز")
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
