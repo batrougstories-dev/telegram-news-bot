@@ -925,9 +925,9 @@ def home():
             info = f"{ta or t} | {st}"
         else:
             info = "لا توجد رواية"
-        return f"📚 Novel Summary Bot v2.1 | قنوات: {chats} | {info}"
+        return f"📚 Novel Summary Bot v2.3 | قنوات: {chats} | {info}"
     except:
-        return "📚 Novel Summary Bot v2.1"
+        return "📚 Novel Summary Bot v2.3"
 
 @app.route("/health")
 def health():
@@ -977,7 +977,7 @@ def status_ep():
                 "status": r[4],
             })
         return json.dumps({
-            "version": "2.1", "channels": chats,
+            "version": "2.3", "channels": chats,
             "ai_model": AI_MODELS[0], "chapter_delay": CHAPTER_DELAY,
             "novels": result,
         }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
@@ -1008,7 +1008,7 @@ def _startup():
     threading.Thread(target=daily_loop,   daemon=True, name="daily").start()
     model = AI_MODELS[0] if (GITHUB_TOKEN and _OAI_OK) else "Google Translate"
     logging.info(
-        f"🚀 Novel Summary Bot v2.1 | نموذج: {model} | "
+        f"🚀 Novel Summary Bot v2.3 | نموذج: {model} | "
         f"فصل كل {CHAPTER_DELAY}s"
     )
 
