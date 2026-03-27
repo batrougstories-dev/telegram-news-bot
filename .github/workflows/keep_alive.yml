@@ -1,0 +1,26 @@
+name: Keep Bot Alive
+
+on:
+  schedule:
+    # كل 5 دقائق - يضرب الخادم لمنع النوم
+    - cron: '*/5 * * * *'
+  workflow_dispatch:   # تشغيل يدوي عند الحاجة
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Ping Bot Server
+        run: |
+          echo "🏓 Pinging bot at $(date)"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 20 \
+            "https://telegram-news-bot-zcn8.onrender.com/health")
+          echo "HTTP Status: $STATUS"
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ Bot is alive"
+          else
+            echo "⚠️ Bot returned $STATUS — may be waking up"
+          fi

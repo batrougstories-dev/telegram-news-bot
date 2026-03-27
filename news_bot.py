@@ -1049,14 +1049,21 @@ def _send_status(cid):
 # Self-Ping
 # ─────────────────────────────────────────────────────
 def self_ping():
+    """
+    يضرب الخادم كل 3 دقائق لمنع النوم على Render Free.
+    يضرب /health (خفيف) وليس / (ثقيل).
+    """
     if not RENDER_URL:
+        logging.warning("⚠️ RENDER_EXTERNAL_URL غير مضبوط — self-ping معطّل")
         return
+    logging.info(f"🏓 self-ping مفعّل → {RENDER_URL}/health كل 3 دقائق")
     while True:
-        time.sleep(4 * 60)
+        time.sleep(3 * 60)          # كل 3 دقائق (أقل من حد النوم 15 د)
         try:
-            requests.get(f"{RENDER_URL}/health", timeout=8)
-        except:
-            pass
+            r = requests.get(f"{RENDER_URL}/health", timeout=10)
+            logging.debug(f"🏓 ping {r.status_code}")
+        except Exception as e:
+            logging.warning(f"🏓 ping فشل: {e}")
 
 # ─────────────────────────────────────────────────────
 # Flask
