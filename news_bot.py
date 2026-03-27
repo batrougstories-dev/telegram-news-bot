@@ -668,12 +668,15 @@ def process_book(book):
     # ─────────────────────────────────────────────────
     # 1️⃣ أرسل النص الكامل أولاً
     # ─────────────────────────────────────────────────
-    author_line = f"\n✍️ {author_ar}" if author_ar else ""
+    author_line    = f"\n✍️ <i>{author_ar}</i>" if author_ar else ""
+    paras          = [p.strip() for p in summary_ar.split("\n") if p.strip()]
+    body_formatted = "\n\n".join(paras)
     text_msg = (
-        f"{emoji} <b>{title_ar}</b>{author_line}\n\n"
-        f"{summary_ar}\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"📂 {cat_label}  |  📚 {source}  |  📅 {today}"
+        f"{emoji} <b>{title_ar}</b>{author_line}\n"
+        f"{'─'*30}\n\n"
+        f"{body_formatted}\n\n"
+        f"{'━'*15}\n"
+        f"📂 {cat_label}  •  📚 {source}  •  📅 {today}"
     )
     logging.info(f"  📤 إرسال النص ({len(text_msg)} حرف)...")
     for part in _split_text(text_msg):
@@ -771,7 +774,7 @@ def home():
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         conn.close()
     except: total = sent = chats = 0
-    return (f"📚 Story Bot v10.0 | قنوات: {chats} | "
+    return (f"📚 Story Bot v10.1 | قنوات: {chats} | "
             f"أُرسل: {sent} رواية | معالج: {total}")
 
 @app.route("/health")
@@ -794,7 +797,7 @@ def stats():
         ).fetchall()
         conn.close()
         return json.dumps({
-            "version": "10.0",
+            "version": "10.1",
             "channels": chats, "sent": sent, "seen": total,
             "cycles": _stats["cycles"],
             "last_10": [
@@ -849,7 +852,7 @@ def _startup():
     threading.Thread(target=tg_poll,   daemon=True, name="poll").start()
     threading.Thread(target=scheduler, daemon=True, name="sched").start()
     threading.Thread(target=self_ping, daemon=True, name="ping").start()
-    logging.info("🚀 Story Bot v10.0 | Standard Ebooks + Gutendex + Open Library")
+    logging.info("🚀 Story Bot v10.1 | 3 مصادر + Wikipedia enrichment")
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
