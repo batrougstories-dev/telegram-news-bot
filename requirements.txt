@@ -5,4 +5,3 @@ edge-tts>=6.1
 Pillow>=9.0
 arabic-reshaper>=2.1
 python-bidi>=0.4.2
-static-ffmpeg>=2.5

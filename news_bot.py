@@ -13,12 +13,7 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 import shutil
-try:
-    import static_ffmpeg
-    static_ffmpeg.add_paths()  # يضيف ffmpeg للـ PATH
-    _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
-except:
-    _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+_FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 import edge_tts
 from flask import Flask
 
