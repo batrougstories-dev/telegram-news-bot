@@ -876,26 +876,32 @@ def _extract_gid(text):
 
 def cmd_from_link(gid, cid):
     """
-    يبدأ تلخيص رواية بناءً على Gutenberg ID.
+    يبدأ تلخيص رواية بناءً على Gutenberg ID المُرسَل من المستخدم.
     يُرسِل رسالة خطأ واضحة إذا فشل أي خطوة.
     """
+    global _worker_thread, _stop_event
+
     try:
         # ① جلب بيانات الرواية من Gutendex
-        tg_send(cid, f"🔍 <b>جارٍ جلب بيانات الكتاب {gid}…</b>")
+        tg_send(cid, f"🔍 <b>جارٍ جلب بيانات الكتاب…</b>")
         r = requests.get(
             f"https://gutendex.com/books/{gid}",
             headers={"User-Agent": UA}, timeout=30,
         )
         if r.status_code != 200:
-            tg_send(cid, f"❌ <b>خطأ:</b> لم يُعثر على الكتاب رقم <code>{gid}</code> في Project Gutenberg.\nتحقق من الرابط وأرسله مجدداً.")
+            tg_send(cid,
+                f"❌ <b>خطأ:</b> لم يُعثر على الكتاب رقم <code>{gid}</code> في Project Gutenberg.\n"
+                "تحقق من الرابط وأرسله مجدداً.")
             return
 
-        book  = r.json()
-        fmts  = book.get("formats", {})
-        txt   = next((u for f, u in fmts.items() if "text/plain" in f), None)
+        book   = r.json()
+        fmts   = book.get("formats", {})
+        txt    = next((u for f, u in fmts.items() if "text/plain" in f), None)
 
         if not txt:
-            tg_send(cid, f"❌ <b>خطأ:</b> هذا الكتاب لا يحتوي نسخة نصية قابلة للقراءة.\nجرّب رابطاً آخر.")
+            tg_send(cid,
+                "❌ <b>خطأ:</b> هذا الكتاب لا يحتوي نسخة نصية قابلة للقراءة.\n"
+                "جرّب رابطاً آخر.")
             return
 
         title  = book.get("title", "").strip()
@@ -907,19 +913,71 @@ def cmd_from_link(gid, cid):
                 "cover": cover, "txt_url": txt}
 
         # ② إيقاف أي رواية نشطة
-        cmd_stop()
-        import time as _t; _t.sleep(2)
+        _stop_event.set()
+        if _worker_thread and _worker_thread.is_alive():
+            _worker_thread.join(timeout=8)
+        _stop_event = threading.Event()
 
-        # ③ تشغيل التلخيص
-        threading.Thread(
-            target=_run_novel, args=(meta,), daemon=True
-        ).start()
+        tg_send(cid, f"⬇️ <b>تحميل النص:</b> «{title}»…")
+
+        # ③ تحميل النص
+        try:
+            text = download_text(meta["txt_url"])
+        except Exception as ex:
+            tg_send(cid, f"❌ <b>خطأ في تحميل النص:</b> {str(ex)[:100]}")
+            return
+
+        if len(text) < 3_000:
+            tg_send(cid, "❌ <b>خطأ:</b> النص قصير جداً أو لا يمكن قراءته.")
+            return
+
+        # ④ تقسيم الفصول
+        chapters = split_chapters(text)
+        if not chapters:
+            tg_send(cid, "❌ <b>خطأ:</b> تعذّر تقسيم الفصول.")
+            return
+
+        if len(chapters) > 30:
+            chapters = chapters[:30]
+
+        # ⑤ حفظ في DB وبدء التلخيص
+        try:
+            novel_id = save_novel(meta["gid"], meta["title"], meta["author"], meta["cover"])
+            save_chapters(novel_id, chapters)
+        except Exception as ex:
+            tg_send(cid, f"❌ <b>خطأ في قاعدة البيانات:</b> {str(ex)[:100]}")
+            return
+
+        # ⑥ إرسال الغلاف
+        try:
+            title_ar  = _simple_translate(title[:200])  or title
+            author_ar = _simple_translate(author[:100]) or author
+            intro = (
+                f"📚 <b>رواية جديدة</b>\n{'━'*24}\n\n"
+                f"📖 <b>{title_ar}</b>\n"
+                f"✍️ <i>{author_ar}</i>\n\n"
+                f"{'─'*24}\n"
+                f"📑 عدد الفصول: <b>{len(chapters)} فصل</b>\n"
+                f"🧠 التلخيص بـ: <b>Llama</b>\n"
+                f"⏱️ فصل كل <b>90 ثانية</b>\n"
+                f"{'─'*24}\n\n"
+                f"⏹️ <b>ستب</b> — إيقاف | ▶️ <b>استمر</b> — متابعة"
+            )
+            broadcast_photo(cover, intro)
+        except Exception:
+            broadcast(f"📚 <b>«{title_ar}»</b> — {len(chapters)} فصل")
+
+        # ⑦ تشغيل الـ worker
+        _worker_thread = threading.Thread(
+            target=_worker, args=(novel_id,), daemon=True, name="worker"
+        )
+        _worker_thread.start()
 
     except requests.exceptions.Timeout:
-        tg_send(cid, "❌ <b>خطأ:</b> انتهت مهلة الاتصال بـ Gutenberg. حاول مجدداً.")
+        tg_send(cid, "❌ <b>خطأ:</b> انتهت مهلة الاتصال. حاول مجدداً.")
     except Exception as ex:
         logging.error(f"cmd_from_link: {ex}")
-        tg_send(cid, f"❌ <b>خطأ غير متوقع:</b> {str(ex)[:120]}")
+        tg_send(cid, f"❌ <b>خطأ غير متوقع:</b> {str(ex)[:150]}")
 
 
     tg_send(cid,
