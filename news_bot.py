@@ -694,3 +694,4 @@ threading.Thread(target=_startup, daemon=True, name="startup").start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
+# v8.0 force rebuild Fri Mar 27 08:52:45 UTC 2026
