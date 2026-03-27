@@ -989,13 +989,47 @@ def _startup():
     init_db()
     if DEFAULT_CHAT:
         add_channel(DEFAULT_CHAT, "default")
-    threading.Thread(target=tg_poll,   daemon=True, name="poll").start()
-    threading.Thread(target=self_ping, daemon=True, name="ping").start()
+    threading.Thread(target=tg_poll,      daemon=True, name="poll").start()
+    threading.Thread(target=self_ping,    daemon=True, name="ping").start()
+    threading.Thread(target=daily_loop,   daemon=True, name="daily").start()
     model = AI_MODELS[0] if (GITHUB_TOKEN and _OAI_OK) else "Google Translate"
     logging.info(
-        f"🚀 Novel Summary Bot v2.0 | نموذج: {model} | "
+        f"🚀 Novel Summary Bot v2.1 | نموذج: {model} | "
         f"فصل كل {CHAPTER_DELAY}s"
     )
+
+def daily_loop():
+    """
+    كل يوم في منتصف الليل (مكة) يختار رواية جديدة تلقائياً.
+    إذا كانت هناك رواية نشطة → ينتظر انتهاءها أولاً.
+    """
+    import datetime
+    MECCA_TZ = timezone(timedelta(hours=3))
+
+    while True:
+        now  = datetime.datetime.now(MECCA_TZ)
+        # الانتظار حتى منتصف الليل القادم (00:05)
+        tomorrow = (now + timedelta(days=1)).replace(
+            hour=0, minute=5, second=0, microsecond=0
+        )
+        wait_sec = (tomorrow - now).total_seconds()
+        logging.info(f"⏰ daily_loop: رواية جديدة بعد {wait_sec/3600:.1f} ساعة")
+        time.sleep(wait_sec)
+
+        # هل توجد رواية نشطة؟
+        try:
+            with sqlite3.connect(DB_PATH) as c:
+                row = c.execute(
+                    "SELECT status FROM novels ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                if row and row[0] == "active":
+                    logging.info("⏭️ daily_loop: رواية نشطة — تخطّى")
+                    continue
+        except Exception as ex:
+            logging.warning(f"daily_loop DB: {ex}")
+
+        logging.info("🌅 daily_loop: اختيار رواية جديدة تلقائياً…")
+        threading.Thread(target=cmd_new, daemon=True).start()
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
