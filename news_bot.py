@@ -46,8 +46,8 @@ UA         = "Mozilla/5.0 (compatible; NovelSummaryBot/2.0)"
 
 # نماذج Llama فقط للتلخيص الأدبي
 AI_MODELS = [
-    "Meta-Llama-3.3-70B-Instruct",   # أحدث Llama
-    "Meta-Llama-3.1-405B-Instruct",  # fallback
+    "Meta-Llama-3.1-405B-Instruct",  # Llama الرئيسي (مثبت أنه يعمل)
+    "Meta-Llama-3.3-70B-Instruct",   # fallback
 ]
 
 TG_MSG       = 3_800   # حد رسالة تيليغرام
