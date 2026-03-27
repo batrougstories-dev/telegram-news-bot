@@ -2,6 +2,5 @@ services:
   - type: web
     name: telegram-news-bot
     env: python
-    buildCommand: |
-      apt-get update -qq && apt-get install -y -qq ffmpeg && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python news_bot.py
