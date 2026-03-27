@@ -251,12 +251,26 @@ def pick_novel_from_gutendex():
                     pass
 
                 logging.info(f"✅ وُجدت: {title} — {author}")
+                # رابط الغلاف
+                cover_url = None
+                for fmt, url in book.get("formats", {}).items():
+                    if "image/jpeg" in fmt:
+                        cover_url = url
+                        break
+                # إذا لم يوجد في formats → نبني الرابط المعياري
+                if not cover_url:
+                    cover_url = (
+                        f"https://www.gutenberg.org/cache/epub/{gid}"
+                        f"/pg{gid}.cover.medium.jpg"
+                    )
+
                 return {
                     "gutenberg_id": gid,
                     "title":        title,
                     "author":       author,
                     "summary":      summary,
                     "text_url":     text_url,
+                    "cover_url":    cover_url,
                 }
         except Exception as ex:
             logging.warning(f"Gutendex محاولة {attempt+1}: {ex}")
@@ -431,6 +445,38 @@ def broadcast(text, parse_mode="HTML"):
         tg_send(cid, text, parse_mode)
         time.sleep(0.4)
 
+def tg_send_photo(chat_id, photo_url, caption, parse_mode="HTML"):
+    """إرسال صورة (غلاف الرواية) مع caption"""
+    try:
+        r = requests.post(
+            f"{TG_API}/sendPhoto",
+            json={
+                "chat_id":    chat_id,
+                "photo":      photo_url,
+                "caption":    caption,
+                "parse_mode": parse_mode,
+            },
+            timeout=20,
+        )
+        d = r.json()
+        if not d.get("ok"):
+            err = d.get("description", "")
+            logging.warning(f"TG photo [{chat_id}]: {err}")
+            if any(w in err for w in ["blocked", "not found", "kicked", "deactivated"]):
+                remove_channel(chat_id)
+            # fallback: أرسل نصاً عادياً إذا فشلت الصورة
+            tg_send(chat_id, caption, parse_mode)
+        return d.get("ok", False)
+    except Exception as ex:
+        logging.warning(f"tg_send_photo: {ex}")
+        tg_send(chat_id, caption, parse_mode)
+        return False
+
+def broadcast_photo(photo_url, caption, parse_mode="HTML"):
+    for cid in get_channels():
+        tg_send_photo(cid, photo_url, caption, parse_mode)
+        time.sleep(0.5)
+
 def _progress_bar(done, total, width=10):
     pct  = int(done / total * 100) if total else 0
     fill = int(done / total * width) if total else 0
@@ -525,7 +571,13 @@ def select_daily_novel(force=False):
             f"⏱️  فاصل بين الدفعات: <b>ساعة</b>\n\n"
             f"🔜 <i>تبدأ الدفعة الأولى الآن…</i>"
         )
-        broadcast(intro_msg)
+        # إرسال الغلاف مع الرسالة التمهيدية
+        cover_url = novel_meta.get("cover_url", "")
+        if cover_url:
+            logging.info(f"🖼️  إرسال الغلاف: {cover_url}")
+            broadcast_photo(cover_url, intro_msg)
+        else:
+            broadcast(intro_msg)
         time.sleep(3)
 
         # إرسال الدفعة الأولى فوراً
