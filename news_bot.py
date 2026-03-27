@@ -898,6 +898,22 @@ def cmd_from_link(gid, cid):
         fmts   = book.get("formats", {})
         txt    = next((u for f, u in fmts.items() if "text/plain" in f), None)
 
+        # fallback: إذا لم يعثر Gutendex على text/plain نبني الرابط يدوياً
+        if not txt:
+            fallback_urls = [
+                f"https://www.gutenberg.org/ebooks/{gid}.txt.utf-8",
+                f"https://www.gutenberg.org/files/{gid}/{gid}-0.txt",
+                f"https://www.gutenberg.org/files/{gid}/{gid}.txt",
+            ]
+            for fb in fallback_urls:
+                try:
+                    hd = requests.head(fb, timeout=8, allow_redirects=True)
+                    if hd.status_code == 200:
+                        txt = fb
+                        break
+                except Exception:
+                    continue
+
         if not txt:
             tg_send(cid,
                 "❌ <b>خطأ:</b> هذا الكتاب لا يحتوي نسخة نصية قابلة للقراءة.\n"
