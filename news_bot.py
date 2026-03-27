@@ -92,25 +92,48 @@ SOURCES = [
 # ─────────────────────────────────────────
 # Google Translate مجاني
 # ─────────────────────────────────────────
-def translate(text, max_chars=1000):
-    """يترجم النص للعربية عبر Google Translate المجاني"""
+def translate_chunk(text):
+    """يترجم قطعة نص واحدة (حتى 4500 حرف) للعربية"""
     if not text or not text.strip():
         return ""
-    # اقتصر على max_chars
-    text = text[:max_chars]
     try:
         r = requests.get(
             "https://translate.googleapis.com/translate_a/single",
             params={"client": "gtx", "sl": "en", "tl": "ar", "dt": "t", "q": text},
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=12,
+            timeout=15,
         )
         data = r.json()
-        result = "".join(part[0] for part in data[0] if part[0])
-        return result.strip()
+        return "".join(part[0] for part in data[0] if part[0]).strip()
     except Exception as e:
-        logging.warning(f"translate: {e}")
+        logging.warning(f"translate_chunk: {e}")
+        return text   # أعد الأصل عند الفشل
+
+def translate(text, max_chars=99999):
+    """يترجم نصاً كاملاً مهما كان طوله (يقسمه إلى قطع)"""
+    if not text or not text.strip():
         return ""
+    text = text[:max_chars]
+    CHUNK = 4000   # حد آمن لـ Google Translate
+    if len(text) <= CHUNK:
+        return translate_chunk(text)
+    # قسّم على فقرات أولاً
+    parts = []
+    current = ""
+    for para in text.split("\n"):
+        if len(current) + len(para) + 1 > CHUNK:
+            if current:
+                parts.append(current)
+            current = para
+        else:
+            current = (current + "\n" + para).strip()
+    if current:
+        parts.append(current)
+    translated = []
+    for p in parts:
+        translated.append(translate_chunk(p))
+        time.sleep(0.8)   # تفادي حظر Google
+    return "\n".join(translated)
 
 # ─────────────────────────────────────────
 # Database
@@ -267,25 +290,41 @@ def send_to_all(text):
         tg_send(cid, text)
         time.sleep(0.3)
 
-def fmt_message(title_ar, summary_ar, emoji, source, url, pub_date):
-    """صياغة رسالة Telegram"""
-    lines = [
-        f"{emoji} <b>{title_ar}</b>",
-        "",
-    ]
-    if summary_ar:
-        # اقتصر على 600 حرف للملخص
-        short = summary_ar[:600]
-        if len(summary_ar) > 600:
-            short += "..."
-        lines.append(short)
-        lines.append("")
-    lines += [
-        f"📚 <b>المصدر:</b> {source}",
-        f"📅 {pub_date}",
-        f'🔗 <a href="{url}">اقرأ الملخص كاملاً</a>',
-    ]
-    return "\n".join(lines)
+PART_SIZE = 2000   # الحد الأقصى لكل جزء
+
+def split_message(text, limit=PART_SIZE):
+    """يقسّم النص إلى أجزاء بحجم limit مع الحفاظ على الكلمات"""
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind(" ", 0, limit)
+        if cut == -1:
+            cut = limit
+        parts.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        parts.append(text)
+    return parts
+
+def fmt_messages(title_ar, summary_ar, emoji, source, pub_date):
+    """يبني قائمة رسائل Telegram (بدون روابط، مع تقسيم الملخص الطويل)"""
+    header = f"{emoji} <b>{title_ar}</b>\n\n"
+    footer = f"\n\n📚 <b>المصدر:</b> {source}\n📅 {pub_date}"
+
+    if not summary_ar:
+        return [header.strip() + footer]
+
+    # أول جزء = header + بداية الملخص
+    body_parts = split_message(summary_ar)
+    msgs = []
+    for i, part in enumerate(body_parts):
+        if i == 0:
+            chunk = header + part
+        else:
+            chunk = f"📖 <b>تابع — {title_ar}</b>\n\n" + part
+        if i == len(body_parts) - 1:
+            chunk += footer
+        msgs.append(chunk)
+    return msgs
 
 # ─────────────────────────────────────────
 # Telegram Polling
@@ -406,10 +445,8 @@ def story_cycle():
                     except:
                         pub_ar = datetime.now(MECCA_TZ).strftime("%d/%m/%Y")
 
-                    # النص للترجمة
-                    body  = get_entry_text(entry)
-                    # اقتصر على 500 حرف للملخص
-                    body  = body[:500] if body else ""
+                    # النص للترجمة — بدون حد للطول
+                    body = get_entry_text(entry)
 
                     logging.info(f"  🌐 ترجمة: {title[:55]}")
 
@@ -418,23 +455,23 @@ def story_cycle():
                     if not title_ar:
                         title_ar = title   # احتفظ بالأصل إذا فشلت الترجمة
 
-                    # ترجمة الملخص
+                    # ترجمة الملخص كاملاً
                     summary_ar = ""
                     if body:
-                        time.sleep(1)   # تفادي حظر Google
-                        summary_ar = translate(body, max_chars=500)
+                        time.sleep(1)
+                        summary_ar = translate(body)
 
-                    # صياغة الرسالة
-                    msg = fmt_message(
+                    # صياغة الرسائل (مقسّمة، بدون روابط)
+                    msgs = fmt_messages(
                         title_ar   = title_ar,
                         summary_ar = summary_ar,
                         emoji      = src["emoji"],
                         source     = src["name"],
-                        url        = url,
                         pub_date   = pub_ar,
                     )
-
-                    send_to_all(msg)
+                    for msg in msgs:
+                        send_to_all(msg)
+                        time.sleep(1)
                     save_sent(title_ar, src["name"], url)
 
                     new_src    += 1
