@@ -749,7 +749,7 @@ def home():
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         conn.close()
     except: total = sent = chats = 0
-    return (f"📚 Story Bot v9.1 | قنوات: {chats} | "
+    return (f"📚 Story Bot v9.2 | قنوات: {chats} | "
             f"أُرسل: {sent} فيديو | معالج: {total}")
 
 @app.route("/health")
@@ -773,7 +773,7 @@ def stats():
         ).fetchall()
         conn.close()
         return json.dumps({
-            "version": "9.1", "channels": chats,
+            "version": "9.2", "channels": chats,
             "sent": sent, "seen": total,
             "filtered": _stats["filtered"], "cycles": _stats["cycles"],
             "last_10": [
@@ -842,7 +842,7 @@ def _startup():
     threading.Thread(target=tg_poll,   daemon=True, name="poll").start()
     threading.Thread(target=scheduler, daemon=True, name="sched").start()
     threading.Thread(target=self_ping, daemon=True, name="ping").start()
-    logging.info("🚀 Story Bot v9.1 جاهز | فلتر محسّن: روايات + قصص + تاريخ | بدون تقنية")
+    logging.info("🚀 Story Bot v9.2 جاهز | فلتر محسّن: روايات + قصص + تاريخ | بدون تقنية")
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
