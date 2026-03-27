@@ -77,7 +77,7 @@ SOURCES = [
 # ② فلتر القصص / الروايات / التاريخ فقط
 # ─────────────────────────────────────────
 
-# كلمات تدل على المحتوى المرغوب
+# ── كلمات الموضوع المرغوب ──────────────────
 ACCEPT_KW = [
     # روايات وقصص وأدب
     "novel","fiction","story","tale","narrative","plot","chapter","protagonist",
@@ -92,24 +92,40 @@ ACCEPT_KW = [
     "chronicle","heritage","antiquity","colonial","roman","greek","ottoman",
     "egypt","renaissance","napoleon","world war","civil war","pharaoh","sultan",
     "king","queen","conquest","expedition","archaeology","artifact","ruins",
-    "medieval","byzantine","mongol","viking","crusade","pirate","explorer",
+    "byzantine","mongol","viking","crusade","pirate","explorer",
 ]
 
-# كلمات تدل على محتوى يجب رفضه
+# ── كلمات الرفض (أعلى أولوية) ──────────────
 REJECT_KW = [
-    "software","coding","programming","api ","blockchain","cryptocurrency",
-    "stock market","investment portfolio","quarterly earnings","revenue growth",
-    "fitness routine","workout plan","diet plan","weight loss",
-    "how to start a business","startup funding","venture capital",
-    "machine learning","artificial intelligence","data science",
+    # تقنية وشركات
+    "silicon valley","tech industry","startup","software","coding","programming",
+    "blockchain","cryptocurrency","bitcoin","nft","web3","fintech",
+    # ذكاء اصطناعي حديث (ليس في سياق تاريخي خيالي)
+    "artificial intelligence","machine learning","deep learning","neural network",
+    "large language model","chatbot","generative ai"," ai ","ai-powered",
+    "ai model","ai dominance","ai development",
+    # عسكري-تقني حديث
+    "military ai","pentagon","defense technology","national security tech",
+    "cyber warfare","drone tech","autonomous weapon",
+    # مال واستثمار
+    "stock market","investment portfolio","quarterly earnings","venture capital",
+    "hedge fund","private equity","ipo","nasdaq","crypto",
+    # لياقة وصحة
+    "fitness routine","workout plan","diet plan","weight loss","calorie",
+    # تطوير ذاتي وأعمال
+    "how to start a business","self-help","productivity hack","morning routine",
+    "passive income","leadership skills",
 ]
 
 def is_relevant(title: str, body: str = "") -> bool:
     """يتحقق إذا كان المحتوى ضمن فئة الروايات/القصص/التاريخ"""
-    combined = (title + " " + body[:400]).lower()
-    has_accept = any(kw in combined for kw in ACCEPT_KW)
-    has_reject = any(kw in combined for kw in REJECT_KW)
-    return has_accept and not has_reject
+    combined = (title + " " + body[:500]).lower()
+    # الرفض له أعلى أولوية
+    for kw in REJECT_KW:
+        if kw in combined:
+            logging.debug(f"    🚫 رفض بسبب: '{kw}'")
+            return False
+    return any(kw in combined for kw in ACCEPT_KW)
 
 # ─────────────────────────────────────────
 # خط عربي
@@ -213,9 +229,16 @@ def make_thumbnail(title_ar: str, source: str, emoji: str, cat: str, output_path
 # ③ الترجمة — مع retry وتحقق من النتيجة
 # ─────────────────────────────────────────
 def _is_arabic(text: str) -> bool:
-    """يتحقق إذا كان النص يحتوي على عربية كافية"""
-    arabic_chars = sum(1 for c in text if "\u0600" <= c <= "\u06ff")
-    return arabic_chars / max(len(text), 1) > 0.25
+    """
+    يتحقق إذا كان النص يحتوي على عربية كافية.
+    يُحسب من الأحرف الأبجدية فقط (يتجاهل الأرقام والمسافات والترقيم)
+    للحصول على نسبة أدق.
+    """
+    if not text: return False
+    alpha  = [c for c in text if c.isalpha()]
+    if not alpha: return False
+    arabic = [c for c in alpha if "\u0600" <= c <= "\u06ff"]
+    return len(arabic) / len(alpha) > 0.45
 
 def translate_chunk(text: str, retries: int = 3) -> str:
     """يترجم جزءاً من النص مع إعادة المحاولة عند الفشل"""
@@ -249,7 +272,7 @@ def translate_chunk(text: str, retries: int = 3) -> str:
             time.sleep(2 * (attempt + 1))
 
     logging.error(f"فشل الترجمة نهائياً: {text[:50]} | {last_err}")
-    return ""   # ← نُعيد فراغاً لا النص الإنجليزي
+    return ""   # ← نُعيد فراغاً دائماً — لا نُرسل محتوى إنجليزياً أبداً
 
 def translate(text: str) -> str:
     """يترجم نصاً كاملاً — يُقسّم عند 4000 حرف"""
@@ -697,7 +720,7 @@ def home():
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         conn.close()
     except: total = sent = chats = 0
-    return (f"📚 Story Bot v9.0 | قنوات: {chats} | "
+    return (f"📚 Story Bot v9.1 | قنوات: {chats} | "
             f"أُرسل: {sent} فيديو | معالج: {total}")
 
 @app.route("/health")
@@ -721,7 +744,7 @@ def stats():
         ).fetchall()
         conn.close()
         return json.dumps({
-            "version": "9.0", "channels": chats,
+            "version": "9.1", "channels": chats,
             "sent": sent, "seen": total,
             "filtered": _stats["filtered"], "cycles": _stats["cycles"],
             "last_10": [
@@ -790,7 +813,7 @@ def _startup():
     threading.Thread(target=tg_poll,   daemon=True, name="poll").start()
     threading.Thread(target=scheduler, daemon=True, name="sched").start()
     threading.Thread(target=self_ping, daemon=True, name="ping").start()
-    logging.info("🚀 Story Bot v9.0 جاهز | فلتر: روايات + قصص + تاريخ")
+    logging.info("🚀 Story Bot v9.1 جاهز | فلتر محسّن: روايات + قصص + تاريخ | بدون تقنية")
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
