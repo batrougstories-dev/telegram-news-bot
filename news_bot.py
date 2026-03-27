@@ -12,7 +12,13 @@ import feedparser, requests
 import arabic_reshaper
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
-import imageio_ffmpeg
+import shutil
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()  # يضيف ffmpeg للـ PATH
+    _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+except:
+    _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 import edge_tts
 from flask import Flask
 
@@ -181,7 +187,7 @@ def text_to_audio(text, path, voice=ARABIC_VOICE):
         time.sleep(0.5)
 
     # دمج الأجزاء بـ ffmpeg
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg = _FFMPEG
     list_file = os.path.join(tmp_dir, "list.txt")
     with open(list_file, "w") as f:
         for p in parts_paths:
@@ -201,7 +207,7 @@ def text_to_audio(text, path, voice=ARABIC_VOICE):
 # ─────────────────────────────────────────
 def make_video(img_path, audio_path, out_path):
     """يدمج الصورة مع الصوت في فيديو MP4 جاهز لليوتيوب"""
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg = _FFMPEG
     cmd = [
         ffmpeg, "-y",
         "-loop", "1", "-i", img_path,
