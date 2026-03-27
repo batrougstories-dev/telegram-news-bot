@@ -494,6 +494,23 @@ def tg_send_video(chat_id, video_path, caption):
     except Exception as e:
         logging.warning(f"tg_send_video: {e}"); return False
 
+def _split_text(text: str, max_len: int = 4000) -> list:
+    """يُقسّم النص إلى أجزاء لا تتجاوز max_len مع الحفاظ على الكلمات"""
+    if len(text) <= max_len:
+        return [text]
+    parts   = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > max_len:
+            if current.strip():
+                parts.append(current.strip())
+            current = line
+        else:
+            current = (current + "\n" + line).strip() if current else line
+    if current.strip():
+        parts.append(current.strip())
+    return parts or [text[:max_len]]
+
 def send_to_all(text):
     for cid in get_channels():
         tg_send(cid, text); time.sleep(0.3)
@@ -641,17 +658,29 @@ def process_entry(entry, src: dict) -> bool:
         if not make_video(img_p, aud_p, vid_p):
             logging.warning(f"  ❌ ffmpeg فشل"); return False
 
-        # الإرسال
+        # ── الإرسال: أولاً النص ثم الفيديو ──────
         cat_label = "تاريخ وحضارات" if cat == "history" else "روايات وقصص"
-        caption   = (
+
+        # 1️⃣ رسالة نصية كاملة
+        text_msg = (
             f"{src['emoji']} <b>{title_ar}</b>\n\n"
-            f"📂 {cat_label}  |  📚 {src['name']}\n"
-            f"📅 {pub_ar}"
+            f"{summary_ar}\n\n"
+            f"━━━━━━━━━━━━\n"
+            f"📂 {cat_label}  |  📚 {src['name']}  |  📅 {pub_ar}"
         )
+        # إذا كان النص طويلاً → نقسّمه
+        for part in _split_text(text_msg):
+            for cid in get_channels():
+                tg_send(cid, part)
+                time.sleep(0.3)
+            time.sleep(1)
+
+        # 2️⃣ الفيديو بعد النص مباشرة
+        caption = f"{src['emoji']} <b>{title_ar}</b>  |  📂 {cat_label}"
         send_video_to_all(vid_p, caption)
         save_sent(title_ar, src["name"], cat, url)
         _stats["sent"] += 1
-        logging.info(f"  🎬 أُرسل: {title_ar[:55]}")
+        logging.info(f"  🎬 أُرسل نص+فيديو: {title_ar[:55]}")
         return True
 
     except Exception as e:
