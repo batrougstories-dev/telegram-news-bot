@@ -352,8 +352,7 @@ def download_text(url):
 def split_chapters(text):
     """
     يقسّم النص إلى فصوله الحقيقية.
-    يدعم أنماطاً متعددة: CHAPTER I / Chapter 1 / BOOK I / PART ONE
-    إذا لم توجد فصول → يقسّم إلى أقسام بالحجم.
+    يتجاوز الفهرس (Contents) ويبدأ من الفصل الأول الحقيقي.
     """
     chap_re = re.compile(
         r"\n\s{0,4}("
@@ -369,14 +368,25 @@ def split_chapters(text):
         re.MULTILINE,
     )
 
-    matches = list(chap_re.finditer(text))
+    all_matches = list(chap_re.finditer(text))
 
-    # هل الفصول في النصف الأول فقط؟ (قد تكون فهرساً)
-    if matches:
-        real = [m for m in matches if m.start() > len(text) * 0.05]
-        if len(real) >= 2:
-            matches = real
+    if not all_matches:
+        # لا فصول → تقسيم بالحجم
+        return _size_split(text)
 
+    # ─── تمييز الفهرس عن النص الحقيقي ───
+    # الفصل الحقيقي: له نص طويل (> 2000 حرف) حتى الفصل التالي
+    # الفهرس: كل "فصل" فيه نص أقل من 100 حرف فقط (مجرد سطر)
+    real_matches = []
+    for i, m in enumerate(all_matches):
+        next_start = all_matches[i+1].start() if i+1 < len(all_matches) else len(text)
+        body_len   = next_start - m.end()
+        if body_len > 2000:
+            real_matches.append(m)
+
+    matches = real_matches if len(real_matches) >= 2 else all_matches
+
+    # ─── استخراج الفصول الحقيقية ───
     if len(matches) >= 2:
         chapters = []
         for i, m in enumerate(matches):
@@ -384,14 +394,17 @@ def split_chapters(text):
             start = m.end()
             end   = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             body  = text[start:end].strip()
-            if len(body) < 200:
+            if len(body) < 300:
                 continue
             chapters.append({"title": title_line, "text": body})
         if chapters:
             logging.info(f"📑 تقسيم بالفصول: {len(chapters)} فصل")
             return chapters
 
-    # لا فصول واضحة → تقسيم بالحجم (كل 8000 حرف = قسم)
+    return _size_split(text)
+
+def _size_split(text):
+    """تقسيم بالحجم عند غياب الفصول"""
     logging.info("📑 لا فصول → تقسيم بالحجم")
     section_size = 8_000
     paragraphs   = text.split("\n\n")
@@ -407,6 +420,7 @@ def split_chapters(text):
             cur = para
     if len(cur) > 500:
         sections.append({"title": f"القسم {sec_num}", "text": cur})
+    logging.info(f"📑 تقسيم بالحجم: {len(sections)} قسم")
     return sections
 
 # ─────────────────────────────────────────────────────
