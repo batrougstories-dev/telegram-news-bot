@@ -44,36 +44,60 @@ MECCA_TZ   = timezone(timedelta(hours=3))
 TG_API     = f"https://api.telegram.org/bot{BOT_TOKEN}"
 UA         = "Mozilla/5.0 (compatible; NovelSummaryBot/2.0)"
 
-# أفضل نموذج للتلخيص الأدبي الاحترافي
+# نماذج Llama فقط للتلخيص الأدبي
 AI_MODELS = [
-    "gpt-4o",                        # الأفضل
-    "Meta-Llama-3.3-70B-Instruct",   # fallback أول
-    "Meta-Llama-3.1-405B-Instruct",  # fallback ثاني
+    "Meta-Llama-3.3-70B-Instruct",   # أحدث Llama
+    "Meta-Llama-3.1-405B-Instruct",  # fallback
 ]
 
 TG_MSG       = 3_800   # حد رسالة تيليغرام
 CHAPTER_DELAY = 90     # ثانية بين إرسال كل فصل
 CHAPTER_MAX   = 12_000 # حد أقصى لنص الفصل المُرسَل للذكاء الاصطناعي
 
+# مواضيع تعطي روايات حصراً
 TOPICS = [
-    "fiction", "adventure", "mystery", "detective",
-    "romance", "gothic", "historical+fiction", "horror",
+    "fiction", "novel", "romance",
+    "gothic+fiction", "historical+fiction",
+    "adventure", "detective", "mystery",
 ]
 
-# قائمة روايات مثبّتة (Gutenberg IDs) للاختيار منها احتياطاً
+# كلمات تثبت أن الكتاب رواية
+NOVEL_ACCEPT = [
+    "novel", "fiction", "-- fiction", "novels",
+    "domestic fiction", "love stories", "adventure stories",
+    "gothic fiction", "psychological fiction", "historical fiction",
+    "detective", "mystery", "romance",
+]
+
+# كلمات تؤكد أن الكتاب ليس رواية
+NOVEL_REJECT = [
+    "poetry", "epic poem", " poem", "poems",
+    "essays", "non-fiction",
+    "biography", "autobiography",
+    "philosophy",
+    "category: plays", "category: drama", "plays/films",
+    "cookery", "mathematics",
+    "category: travel", "travel writing",
+    "sermons", "category: mythology", "category: folklore",
+]
+
+# روايات احتياطية مضمونة (كلها روايات بلا استثناء)
 FALLBACK_NOVELS = [
-    (84,   "Frankenstein",            "Mary Shelley"),
-    (98,   "A Tale of Two Cities",    "Charles Dickens"),
-    (1342, "Pride and Prejudice",     "Jane Austen"),
-    (11,   "Alice in Wonderland",     "Lewis Carroll"),
-    (74,   "The Adventures of Tom Sawyer", "Mark Twain"),
-    (1400, "Great Expectations",      "Charles Dickens"),
-    (2701, "Moby Dick",               "Herman Melville"),
-    (345,  "Dracula",                 "Bram Stoker"),
-    (1661, "The Adventures of Sherlock Holmes", "Arthur Conan Doyle"),
-    (5200, "Metamorphosis",           "Franz Kafka"),
-    (174,  "The Picture of Dorian Gray", "Oscar Wilde"),
-    (1260, "Jane Eyre",               "Charlotte Brontë"),
+    (84,   "Frankenstein",                       "Mary Shelley"),
+    (98,   "A Tale of Two Cities",               "Charles Dickens"),
+    (1342, "Pride and Prejudice",               "Jane Austen"),
+    (1400, "Great Expectations",                "Charles Dickens"),
+    (2701, "Moby Dick",                         "Herman Melville"),
+    (345,  "Dracula",                           "Bram Stoker"),
+    (174,  "The Picture of Dorian Gray",        "Oscar Wilde"),
+    (1260, "Jane Eyre",                         "Charlotte Brontë"),
+    (161,  "Sense and Sensibility",             "Jane Austen"),
+    (730,  "Oliver Twist",                      "Charles Dickens"),
+    (1184, "The Count of Monte Cristo",         "Alexandre Dumas"),
+    (2097, "Treasure Island",                   "Robert Louis Stevenson"),
+    (768,  "Wuthering Heights",                 "Emily Brontë"),
+    (43,   "The Strange Case of Dr. Jekyll",    "Robert Louis Stevenson"),
+    (1232, "The Prince",                        "Niccolò Machiavelli"),
 ]
 
 # ─────────────────────────────────────────────────────
@@ -193,8 +217,31 @@ def count_done(novel_id):
 # ─────────────────────────────────────────────────────
 # Gutendex + Project Gutenberg
 # ─────────────────────────────────────────────────────
+def _is_novel(book):
+    """
+    يتحقق أن الكتاب رواية حقيقية.
+    - الرفض يعتمد على bookshelves فقط (لتجنب الرفض الخاطئ)
+    - القبول يعتمد على subjects + bookshelves
+    """
+    subjects    = " ".join(book.get("subjects",    [])).lower()
+    bookshelves = " ".join(book.get("bookshelves", [])).lower()
+
+    # رفض بناءً على bookshelves (أكثر دقة)
+    for kw in NOVEL_REJECT:
+        if kw in bookshelves:
+            return False
+
+    # قبول إذا وُجد مؤشر رواية في أي مكان
+    combined = subjects + " " + bookshelves
+    for kw in NOVEL_ACCEPT:
+        if kw in combined:
+            return True
+
+    # إذا لم يوجد مؤشر واضح → نرفض احتياطاً
+    return False
+
 def pick_novel_gutendex():
-    """يختار رواية عشوائية من Gutendex"""
+    """يختار رواية حصراً من Gutendex مع التحقق من النوع"""
     topic = random.choice(TOPICS)
     page  = random.randint(1, 6)
     logging.info(f"🔍 Gutendex [{topic}] صفحة {page}…")
@@ -209,19 +256,28 @@ def pick_novel_gutendex():
         results = r.json().get("results", [])
         random.shuffle(results)
         for book in results:
+            # ① تحقق أنه رواية
+            if not _is_novel(book):
+                logging.info(f"  ⏭️ ليس رواية: {book.get('title','')[:40]}")
+                continue
+
             fmts = book.get("formats", {})
             txt  = next((u for f, u in fmts.items() if "text/plain" in f), None)
             if not txt:
                 continue
+
             gid    = book["id"]
             title  = book.get("title", "").strip()
             author = ", ".join(a["name"] for a in book.get("authors", [])[:2])
             cover  = next((u for f, u in fmts.items() if "image/jpeg" in f),
                           f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg")
-            # تحقق: لم تُستخدم من قبل
+
+            # ② لم تُستخدم من قبل
             with sqlite3.connect(DB_PATH) as c:
                 if c.execute("SELECT 1 FROM novels WHERE gid=?", (gid,)).fetchone():
                     continue
+
+            logging.info(f"  ✅ رواية: {title[:50]}")
             return {"gid": gid, "title": title, "author": author,
                     "cover": cover, "txt_url": txt}
     except Exception as ex:
@@ -229,7 +285,10 @@ def pick_novel_gutendex():
     return None
 
 def pick_novel_fallback():
-    """يختار من قائمة الروايات الثابتة"""
+    """
+    يختار من قائمة الروايات الاحتياطية المضمونة عبر Gutendex API.
+    يستخدم فقط إذا فشل Gutendex في إيجاد رواية.
+    """
     used = set()
     try:
         with sqlite3.connect(DB_PATH) as c:
@@ -240,8 +299,30 @@ def pick_novel_fallback():
     if not pool:
         pool = FALLBACK_NOVELS
     gid, title, author = random.choice(pool)
-    cover = f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg"
+
+    # نحاول جلب البيانات من Gutendex أولاً (للحصول على الصورة الصحيحة)
+    try:
+        r = requests.get(
+            f"https://gutendex.com/books/{gid}",
+            headers={"User-Agent": UA}, timeout=30,
+        )
+        if r.status_code == 200:
+            book = r.json()
+            fmts  = book.get("formats", {})
+            cover = next((u for f, u in fmts.items() if "image/jpeg" in f),
+                         f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg")
+            txt   = next((u for f, u in fmts.items() if "text/plain" in f),
+                         f"https://www.gutenberg.org/ebooks/{gid}.txt.utf-8")
+            logging.info(f"  ✅ fallback (Gutendex): {title[:50]}")
+            return {"gid": gid, "title": title, "author": author,
+                    "cover": cover, "txt_url": txt}
+    except Exception as ex:
+        logging.warning(f"  fallback Gutendex: {ex}")
+
+    # إذا فشل Gutendex → روابط مباشرة من Gutenberg (احتياط أخير)
+    cover   = f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg"
     txt_url = f"https://www.gutenberg.org/ebooks/{gid}.txt.utf-8"
+    logging.info(f"  ✅ fallback (direct): {title[:50]}")
     return {"gid": gid, "title": title, "author": author,
             "cover": cover, "txt_url": txt_url}
 
