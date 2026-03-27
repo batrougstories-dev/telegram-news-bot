@@ -844,19 +844,97 @@ def _handle(u):
     elif text.startswith("/status"):
         _send_status(cid)
 
-def _send_welcome(cid):
+    elif "gutenberg.org" in text.lower():
+        # المستخدم أرسل رابط Gutenberg مباشرة
+        gid = _extract_gid(text)
+        if gid:
+            title = chat.get("title") or chat.get("first_name") or str(cid)
+            add_channel(cid, title)
+            threading.Thread(
+                target=cmd_from_link, args=(gid, cid), daemon=True
+            ).start()
+        else:
+            tg_send(cid, "❌ <b>لم أتمكن من قراءة الرابط.</b>\nأرسل الرابط بهذا الشكل:\n<code>https://www.gutenberg.org/ebooks/1184</code>")
+
+def _extract_gid(text):
+    """
+    يستخرج Gutenberg book ID من أي رابط أرسله المستخدم.
+    يدعم:
+      https://www.gutenberg.org/ebooks/1184
+      https://www.gutenberg.org/ebooks/1184.txt.utf-8
+      https://gutenberg.org/ebooks/1184
+      https://www.gutenberg.org/cache/epub/1184/pg1184.txt
+    """
+    m = re.search(r'gutenberg\.org/(?:ebooks|cache/epub)/(\d+)', text)
+    if m:
+        return int(m.group(1))
+    # رقم مجرد في النص
+    m = re.search(r'\b(\d{2,6})\b', text)
+    if m:
+        return int(m.group(1))
+    return None
+
+def cmd_from_link(gid, cid):
+    """
+    يبدأ تلخيص رواية بناءً على Gutenberg ID.
+    يُرسِل رسالة خطأ واضحة إذا فشل أي خطوة.
+    """
+    try:
+        # ① جلب بيانات الرواية من Gutendex
+        tg_send(cid, f"🔍 <b>جارٍ جلب بيانات الكتاب {gid}…</b>")
+        r = requests.get(
+            f"https://gutendex.com/books/{gid}",
+            headers={"User-Agent": UA}, timeout=30,
+        )
+        if r.status_code != 200:
+            tg_send(cid, f"❌ <b>خطأ:</b> لم يُعثر على الكتاب رقم <code>{gid}</code> في Project Gutenberg.\nتحقق من الرابط وأرسله مجدداً.")
+            return
+
+        book  = r.json()
+        fmts  = book.get("formats", {})
+        txt   = next((u for f, u in fmts.items() if "text/plain" in f), None)
+
+        if not txt:
+            tg_send(cid, f"❌ <b>خطأ:</b> هذا الكتاب لا يحتوي نسخة نصية قابلة للقراءة.\nجرّب رابطاً آخر.")
+            return
+
+        title  = book.get("title", "").strip()
+        author = ", ".join(a["name"] for a in book.get("authors", [])[:2])
+        cover  = next((u for f, u in fmts.items() if "image/jpeg" in f),
+                      f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg")
+
+        meta = {"gid": gid, "title": title, "author": author,
+                "cover": cover, "txt_url": txt}
+
+        # ② إيقاف أي رواية نشطة
+        cmd_stop()
+        import time as _t; _t.sleep(2)
+
+        # ③ تشغيل التلخيص
+        threading.Thread(
+            target=_run_novel, args=(meta,), daemon=True
+        ).start()
+
+    except requests.exceptions.Timeout:
+        tg_send(cid, "❌ <b>خطأ:</b> انتهت مهلة الاتصال بـ Gutenberg. حاول مجدداً.")
+    except Exception as ex:
+        logging.error(f"cmd_from_link: {ex}")
+        tg_send(cid, f"❌ <b>خطأ غير متوقع:</b> {str(ex)[:120]}")
+
+
     tg_send(cid,
         "📚 <b>بوت ملخصات الروايات الكلاسيكية</b>\n"
         f"{'━' * 26}\n\n"
-        "يختار روايةً كلاسيكية ويلخّص كل فصل فيها\n"
-        "تلخيصاً أدبياً احترافياً مفصّلاً بالعربية\n\n"
-        "📡 المصدر: Project Gutenberg\n"
-        f"🧠 الذكاء: {AI_MODELS[0]}\n\n"
+        "🔗 <b>أرسل رابط الرواية مباشرة:</b>\n"
+        "<code>https://www.gutenberg.org/ebooks/1184</code>\n\n"
+        "البوت سيلخّص كل فصل تلخيصاً أدبياً\naحترافياً مفصّلاً بالعربية\n\n"
+        f"🧠 الذكاء: <b>{AI_MODELS[0]}</b>\n"
+        f"{'─' * 26}\n"
         "<b>الأوامر:</b>\n"
-        "📖 <b>جديد</b> — اختر رواية جديدة\n"
-        "⏹️ <b>ستب</b> — أوقف التلخيص\n"
+        "⏹️ <b>ستب</b> — أوقف التلخيص الحالي\n"
         "▶️ <b>استمر</b> — تابع رواية موقوفة\n"
-        "📊 <b>/status</b> — التقدم الحالي"
+        "📊 <b>/status</b> — التقدم الحالي\n\n"
+        "🌐 <a href='https://www.gutenberg.org/browse/scores/top'>تصفح أشهر الروايات</a>"
     )
 
 def _send_status(cid):
