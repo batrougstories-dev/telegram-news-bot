@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-📚 Novel & Story Summaries Bot v8.0
-يجلب ملخصات الروايات ← يترجمها للعربية ← يحوّلها لفيديو ← يرسلها
+📚 Novel & Story Summaries Bot v9.0
+يجلب ملخصات الروايات والقصص والتاريخ ← يفلترها ← يترجم ← فيديو ← يرسل
 """
 
 import os, json, logging, sqlite3, re, time, html as html_lib
@@ -13,19 +13,22 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 import shutil as _shutil
-_FFMPEG = None  # يُحدَّد عند أول استخدام
+import edge_tts
+from flask import Flask
+
+# ── ffmpeg ──────────────────────────────
+_FFMPEG = None
 
 def _get_ffmpeg():
     global _FFMPEG
-    if _FFMPEG: return _FFMPEG
+    if _FFMPEG:
+        return _FFMPEG
     try:
         import imageio_ffmpeg as _iio
         _FFMPEG = _iio.get_ffmpeg_exe()
     except Exception:
         _FFMPEG = _shutil.which("ffmpeg") or "ffmpeg"
     return _FFMPEG
-import edge_tts
-from flask import Flask
 
 # ─────────────────────────────────────────
 # Logging
@@ -45,26 +48,68 @@ DEFAULT_CHAT = int(os.environ.get("DEFAULT_CHAT_ID", "0"))
 DB_PATH      = "/tmp/storybot.db"
 FONT_PATH    = "/tmp/arabic_font.ttf"
 FONT_URL     = "https://github.com/google/fonts/raw/main/ofl/cairo/Cairo%5Bslnt%2Cwght%5D.ttf"
-CHECK_EVERY  = 6 * 60 * 60          # كل 6 ساعات
+CHECK_EVERY  = 6 * 60 * 60
 MECCA_TZ     = timezone(timedelta(hours=3))
-ARABIC_VOICE = "ar-SA-ZariyahNeural"   # أفضل صوت عربي سعودي نسائي
+ARABIC_VOICE = "ar-SA-ZariyahNeural"
+FETCH_HEADERS= {"User-Agent": "Feedfetcher-Google; (+http://www.google.com/feedfetcher.html)"}
 
 # ─────────────────────────────────────────
-# مصادر ملخصات الروايات والقصص
+# ① مصادر القصص والروايات والتاريخ
 # ─────────────────────────────────────────
 SOURCES = [
-    {"name": "Four Minute Books",   "url": "https://fourminutebooks.com/feed/",               "emoji": "📖"},
-    {"name": "Crime Fiction Lover", "url": "https://crimefictionlover.com/feed/",              "emoji": "🔍"},
-    {"name": "Novel Suspects",      "url": "https://novelsuspects.com/feed/",                  "emoji": "📚"},
-    {"name": "Book Summary Club",   "url": "https://booksummaryclub.com/feed",                 "emoji": "📝"},
-    {"name": "Shortform",           "url": "https://www.shortform.com/blog/feed/",             "emoji": "✨"},
-    {"name": "Literary Hub",        "url": "https://lithub.com/feed/",                         "emoji": "🖊️"},
-    {"name": "Book Riot",           "url": "https://bookriot.com/feed/",                       "emoji": "📕"},
-    {"name": "The Guardian Books",  "url": "https://www.theguardian.com/books/rss",            "emoji": "🏛️"},
-    {"name": "NPR Books",           "url": "https://feeds.npr.org/1032/rss.xml",               "emoji": "🎙️"},
+    # ── روايات وقصص ──────────────────────
+    {"name": "Crime Fiction Lover",   "url": "https://crimefictionlover.com/feed/",          "emoji": "🔍", "cat": "novel"},
+    {"name": "Historical Novel Soc.", "url": "https://historicalnovelsociety.org/feed/",      "emoji": "📜", "cat": "history"},
+    {"name": "The Marginalian",       "url": "https://www.themarginalian.org/feed/",          "emoji": "✨", "cat": "novel"},
+    {"name": "Literary Hub",          "url": "https://lithub.com/feed/",                      "emoji": "🖊️", "cat": "novel"},
+    {"name": "Open Culture Books",    "url": "https://www.openculture.com/category/books/feed","emoji": "📖", "cat": "novel"},
+    {"name": "Book Riot",             "url": "https://bookriot.com/feed/",                    "emoji": "📕", "cat": "novel"},
+    {"name": "Novel Suspects",        "url": "https://novelsuspects.com/feed/",               "emoji": "📚", "cat": "novel"},
+    {"name": "The Guardian Books",    "url": "https://www.theguardian.com/books/rss",         "emoji": "🏛️", "cat": "novel"},
+    # ── تاريخ ────────────────────────────
+    {"name": "History Extra",         "url": "https://www.historyextra.com/feed/",            "emoji": "⚔️", "cat": "history"},
+    {"name": "JSTOR Daily",           "url": "https://daily.jstor.org/feed/",                 "emoji": "🗺️", "cat": "history"},
+    {"name": "NPR Books",             "url": "https://feeds.npr.org/1032/rss.xml",            "emoji": "🎙️", "cat": "novel"},
+    {"name": "Shortform Blog",        "url": "https://www.shortform.com/blog/feed/",          "emoji": "📝", "cat": "novel"},
 ]
 
-FETCH_HEADERS = {"User-Agent": "Feedfetcher-Google; (+http://www.google.com/feedfetcher.html)"}
+# ─────────────────────────────────────────
+# ② فلتر القصص / الروايات / التاريخ فقط
+# ─────────────────────────────────────────
+
+# كلمات تدل على المحتوى المرغوب
+ACCEPT_KW = [
+    # روايات وقصص وأدب
+    "novel","fiction","story","tale","narrative","plot","chapter","protagonist",
+    "character","author","series","thriller","mystery","adventure","fantasy",
+    "literary","novella","memoir","biography","autobiography","saga","epic",
+    "romance","detective","crime","fairy tale","folklore","legend","myth",
+    "fable","classic","literature","book","reads","readers","reading","book club",
+    "award","bestseller","review","published","genre","short story","prose","poem",
+    # تاريخ وحضارات
+    "history","historical","ancient","medieval","empire","civilization","war",
+    "revolution","dynasty","century","era","kingdom","battle","historian",
+    "chronicle","heritage","antiquity","colonial","roman","greek","ottoman",
+    "egypt","renaissance","napoleon","world war","civil war","pharaoh","sultan",
+    "king","queen","conquest","expedition","archaeology","artifact","ruins",
+    "medieval","byzantine","mongol","viking","crusade","pirate","explorer",
+]
+
+# كلمات تدل على محتوى يجب رفضه
+REJECT_KW = [
+    "software","coding","programming","api ","blockchain","cryptocurrency",
+    "stock market","investment portfolio","quarterly earnings","revenue growth",
+    "fitness routine","workout plan","diet plan","weight loss",
+    "how to start a business","startup funding","venture capital",
+    "machine learning","artificial intelligence","data science",
+]
+
+def is_relevant(title: str, body: str = "") -> bool:
+    """يتحقق إذا كان المحتوى ضمن فئة الروايات/القصص/التاريخ"""
+    combined = (title + " " + body[:400]).lower()
+    has_accept = any(kw in combined for kw in ACCEPT_KW)
+    has_reject = any(kw in combined for kw in REJECT_KW)
+    return has_accept and not has_reject
 
 # ─────────────────────────────────────────
 # خط عربي
@@ -72,7 +117,7 @@ FETCH_HEADERS = {"User-Agent": "Feedfetcher-Google; (+http://www.google.com/feed
 def download_font():
     if os.path.exists(FONT_PATH) and os.path.getsize(FONT_PATH) > 100_000:
         return
-    logging.info("⬇️ تحميل خط Cairo العربي...")
+    logging.info("⬇️ تحميل خط Cairo...")
     try:
         r = requests.get(FONT_URL, timeout=30)
         with open(FONT_PATH, "wb") as f:
@@ -81,75 +126,83 @@ def download_font():
     except Exception as e:
         logging.warning(f"font download: {e}")
 
-def ar(text):
-    """إعادة تشكيل النص العربي لـ Pillow (RTL + reshaping)"""
+def ar(text: str) -> str:
     try:
         return get_display(arabic_reshaper.reshape(str(text)))
     except:
         return str(text)
 
 # ─────────────────────────────────────────
-# صورة الغلاف (Thumbnail)
+# صورة الغلاف 1280×720
 # ─────────────────────────────────────────
-def make_thumbnail(title_ar, source, emoji, output_path):
-    """ينشئ صورة غلاف 1280×720 جاهزة لليوتيوب"""
+def make_thumbnail(title_ar: str, source: str, emoji: str, cat: str, output_path: str):
+    """ينشئ صورة غلاف 1280×720 بتصميم مختلف حسب الفئة"""
     W, H = 1280, 720
     img  = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(img)
 
-    # خلفية: تدرّج بنفسجي-أزرق داكن
+    # لون الخلفية حسب الفئة
+    if cat == "history":
+        # بني-ذهبي (تاريخ)
+        bg_top, bg_bot = (35, 20, 8), (55, 35, 12)
+        accent         = (212, 160, 40)
+        header_bg      = (45, 25, 8)
+    else:
+        # بنفسجي-أزرق (روايات)
+        bg_top, bg_bot = (12, 8, 38), (20, 16, 68)
+        accent         = (212, 175, 55)
+        header_bg      = (20, 10, 50)
+
     for y in range(H):
         t   = y / H
-        r_c = int(12 + t * 8)
-        g_c = int(8  + t * 12)
-        b_c = int(38 + t * 30)
+        r_c = int(bg_top[0] + t * (bg_bot[0] - bg_top[0]))
+        g_c = int(bg_top[1] + t * (bg_bot[1] - bg_top[1]))
+        b_c = int(bg_top[2] + t * (bg_bot[2] - bg_top[2]))
         draw.line([(0, y), (W, y)], fill=(r_c, g_c, b_c))
 
-    # إطار ذهبي مزدوج
+    # إطار مزدوج
     for pad, w in [(10, 4), (20, 1)]:
-        draw.rectangle([pad, pad, W-pad, H-pad], outline=(212, 175, 55), width=w)
+        draw.rectangle([pad, pad, W-pad, H-pad], outline=accent, width=w)
 
-    # شريط علوي
-    draw.rectangle([0, 0, W, 115], fill=(20, 10, 50))
-    draw.line([(60, 114), (W-60, 114)], fill=(212, 175, 55), width=2)
+    # شريط علوي وسفلي
+    draw.rectangle([0, 0, W, 115], fill=header_bg)
+    draw.line([(60, 114), (W-60, 114)], fill=accent, width=2)
+    draw.rectangle([0, H-110, W, H], fill=header_bg)
+    draw.line([(60, H-110), (W-60, H-110)], fill=accent, width=2)
 
-    # شريط سفلي
-    draw.rectangle([0, H-110, W, H], fill=(20, 10, 50))
-    draw.line([(60, H-110), (W-60, H-110)], fill=(212, 175, 55), width=2)
+    # نجوم زخرفية
+    for x in [75, 165, W-75, W-165]:
+        draw.regular_polygon((x, 58, 9), 6, fill=accent)
 
-    # زخرفة نجوم
-    for x in [80, 170, W-80, W-170]:
-        draw.regular_polygon((x, 58, 9), 6, fill=(212, 175, 55))
-
-    # خطوط وسطية خفيفة
+    # خطوط وسطية
     for dy in [-6, 6]:
         draw.line([(80, H//2 + dy), (W-80, H//2 + dy)], fill=(70, 55, 110), width=1)
 
-    # تحميل الخطوط
+    # خطوط
     try:
-        fnt_hdr  = ImageFont.truetype(FONT_PATH, 29)
-        fnt_big  = ImageFont.truetype(FONT_PATH, 82)
-        fnt_med  = ImageFont.truetype(FONT_PATH, 65)
-        fnt_src  = ImageFont.truetype(FONT_PATH, 36)
+        fnt_hdr = ImageFont.truetype(FONT_PATH, 29)
+        fnt_big = ImageFont.truetype(FONT_PATH, 80)
+        fnt_med = ImageFont.truetype(FONT_PATH, 63)
+        fnt_src = ImageFont.truetype(FONT_PATH, 35)
     except:
         fnt_hdr = fnt_big = fnt_med = fnt_src = ImageFont.load_default()
 
     # نص الهيدر
-    draw.text((W//2, 58), ar("✦  ملخصات الروايات العالمية  ✦"),
-              font=fnt_hdr, fill=(212, 175, 55), anchor="mm")
+    header_text = "✦  تاريخ وحضارات  ✦" if cat == "history" else "✦  ملخصات الروايات والقصص  ✦"
+    draw.text((W//2, 58), ar(header_text), font=fnt_hdr, fill=accent, anchor="mm")
 
-    # العنوان — أول 4 كلمات في سطر، الباقي في سطر ثانٍ
+    # العنوان — أول 4 كلمات، ثم الباقي في سطر ثانٍ
     words = title_ar.split()
     line1 = " ".join(words[:4])
     line2 = " ".join(words[4:8]) if len(words) > 4 else ""
 
     if line2:
         draw.text((W//2, H//2 - 55), ar(line1), font=fnt_med, fill=(255, 255, 255), anchor="mm")
-        draw.text((W//2, H//2 + 40), ar(line2), font=fnt_med, fill=(220, 220, 255), anchor="mm")
+        draw.text((W//2, H//2 + 40), ar(line2), font=fnt_med, fill=(225, 225, 255), anchor="mm")
     else:
         draw.text((W//2, H//2 - 15), ar(line1), font=fnt_big, fill=(255, 255, 255), anchor="mm")
 
-    # اسم المصدر
+    # المصدر
     draw.text((W//2, H - 55), ar(f"{emoji}   {source}"),
               font=fnt_src, fill=(180, 180, 230), anchor="mm")
 
@@ -157,51 +210,118 @@ def make_thumbnail(title_ar, source, emoji, output_path):
     return output_path
 
 # ─────────────────────────────────────────
-# تحويل النص لصوت (TTS)
+# ③ الترجمة — مع retry وتحقق من النتيجة
 # ─────────────────────────────────────────
-async def _tts_async(text, path, voice):
+def _is_arabic(text: str) -> bool:
+    """يتحقق إذا كان النص يحتوي على عربية كافية"""
+    arabic_chars = sum(1 for c in text if "\u0600" <= c <= "\u06ff")
+    return arabic_chars / max(len(text), 1) > 0.25
+
+def translate_chunk(text: str, retries: int = 3) -> str:
+    """يترجم جزءاً من النص مع إعادة المحاولة عند الفشل"""
+    if not text or not text.strip():
+        return ""
+    text = text[:4000]
+    last_err = ""
+    for attempt in range(retries):
+        try:
+            r = requests.get(
+                "https://translate.googleapis.com/translate_a/single",
+                params={"client": "gtx", "sl": "en", "tl": "ar", "dt": "t", "q": text},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                result = r.json()
+                translated = "".join(p[0] for p in result[0] if p[0]).strip()
+                # تحقق: إذا أُعيد النص الإنجليزي بدون ترجمة → أعد المحاولة
+                if translated and _is_arabic(translated):
+                    return translated
+                elif translated:
+                    # ربما النص قصير جداً أو اسم خاص
+                    if len(text) < 40:
+                        return translated
+                    logging.warning(f"ترجمة غير عربية (محاولة {attempt+1}): {translated[:40]}")
+                    time.sleep(2)
+        except Exception as e:
+            last_err = str(e)
+            logging.warning(f"translate attempt {attempt+1}: {e}")
+            time.sleep(2 * (attempt + 1))
+
+    logging.error(f"فشل الترجمة نهائياً: {text[:50]} | {last_err}")
+    return ""   # ← نُعيد فراغاً لا النص الإنجليزي
+
+def translate(text: str) -> str:
+    """يترجم نصاً كاملاً — يُقسّم عند 4000 حرف"""
+    if not text or not text.strip():
+        return ""
+    CHUNK = 3800
+    if len(text) <= CHUNK:
+        return translate_chunk(text)
+
+    # تقسيم بالفقرات
+    parts, current = [], ""
+    for para in text.split("\n"):
+        if len(current) + len(para) + 1 > CHUNK:
+            if current.strip():
+                parts.append(current.strip())
+            current = para
+        else:
+            current = (current + "\n" + para).strip()
+    if current.strip():
+        parts.append(current.strip())
+
+    translated_parts = []
+    for p in parts:
+        t = translate_chunk(p)
+        if t:
+            translated_parts.append(t)
+        time.sleep(1)
+    return "\n".join(translated_parts)
+
+# ─────────────────────────────────────────
+# TTS — تحويل النص لصوت
+# ─────────────────────────────────────────
+async def _tts_async(text: str, path: str, voice: str):
     comm = edge_tts.Communicate(text, voice)
     await comm.save(path)
 
-def text_to_audio(text, path, voice=ARABIC_VOICE):
-    """يحوّل النص العربي لملف صوتي MP3"""
-    # edge-tts لها حد ~5000 حرف لكل طلب — نقسّم إن احتجنا
+def text_to_audio(text: str, path: str, voice: str = ARABIC_VOICE):
     MAX = 4500
     if len(text) <= MAX:
         asyncio.run(_tts_async(text, path, voice))
         return
-    # نص طويل: نقسّم ونجمع
-    parts_paths = []
-    chunks = []
-    current = ""
-    for sentence in re.split(r'(?<=[.!؟،\n])', text):
+
+    # نص طويل: نقسّم ثم ندمج
+    chunks, current = [], ""
+    for sentence in re.split(r"(?<=[.!؟،\n])", text):
         if len(current) + len(sentence) > MAX:
-            if current:
+            if current.strip():
                 chunks.append(current.strip())
             current = sentence
         else:
             current += sentence
-    if current:
+    if current.strip():
         chunks.append(current.strip())
 
     tmp_dir = tempfile.mkdtemp()
+    parts   = []
     for i, chunk in enumerate(chunks):
         p = os.path.join(tmp_dir, f"part_{i}.mp3")
         asyncio.run(_tts_async(chunk, p, voice))
-        parts_paths.append(p)
+        parts.append(p)
         time.sleep(0.5)
 
-    # دمج الأجزاء بـ ffmpeg
-    ffmpeg = _get_ffmpeg()
+    # دمج
+    ffmpeg    = _get_ffmpeg()
     list_file = os.path.join(tmp_dir, "list.txt")
     with open(list_file, "w") as f:
-        for p in parts_paths:
+        for p in parts:
             f.write(f"file '{p}'\n")
     subprocess.run([ffmpeg, "-y", "-f", "concat", "-safe", "0",
                     "-i", list_file, "-c", "copy", path],
                    capture_output=True, timeout=120)
-    # تنظيف
-    for p in parts_paths:
+    for p in parts:
         try: os.remove(p)
         except: pass
     try: os.rmdir(tmp_dir)
@@ -210,8 +330,7 @@ def text_to_audio(text, path, voice=ARABIC_VOICE):
 # ─────────────────────────────────────────
 # إنشاء الفيديو
 # ─────────────────────────────────────────
-def make_video(img_path, audio_path, out_path):
-    """يدمج الصورة مع الصوت في فيديو MP4 جاهز لليوتيوب"""
+def make_video(img_path: str, audio_path: str, out_path: str) -> bool:
     ffmpeg = _get_ffmpeg()
     cmd = [
         ffmpeg, "-y",
@@ -227,50 +346,10 @@ def make_video(img_path, audio_path, out_path):
     ]
     result = subprocess.run(cmd, capture_output=True, timeout=600)
     if result.returncode != 0:
-        logging.error(f"ffmpeg error: {result.stderr.decode()[-400:]}")
+        logging.error(f"ffmpeg: {result.stderr.decode()[-300:]}")
         return False
-    size_mb = os.path.getsize(out_path) / (1024 * 1024)
-    logging.info(f"🎬 فيديو جاهز: {size_mb:.1f}MB")
+    logging.info(f"🎬 {os.path.getsize(out_path)/1024/1024:.1f}MB")
     return True
-
-# ─────────────────────────────────────────
-# ترجمة النصوص
-# ─────────────────────────────────────────
-def translate_chunk(text):
-    if not text or not text.strip():
-        return ""
-    try:
-        r = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={"client": "gtx", "sl": "en", "tl": "ar", "dt": "t", "q": text},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15,
-        )
-        return "".join(p[0] for p in r.json()[0] if p[0]).strip()
-    except Exception as e:
-        logging.warning(f"translate: {e}")
-        return text
-
-def translate(text):
-    """يترجم نصاً كاملاً مهما كان طوله"""
-    if not text or not text.strip():
-        return ""
-    CHUNK = 4000
-    if len(text) <= CHUNK:
-        return translate_chunk(text)
-    parts, current = [], ""
-    for para in text.split("\n"):
-        if len(current) + len(para) + 1 > CHUNK:
-            if current: parts.append(current)
-            current = para
-        else:
-            current = (current + "\n" + para).strip()
-    if current: parts.append(current)
-    translated = []
-    for p in parts:
-        translated.append(translate_chunk(p))
-        time.sleep(0.8)
-    return "\n".join(translated)
 
 # ─────────────────────────────────────────
 # قاعدة البيانات
@@ -282,14 +361,13 @@ def init_db():
         chat_id INTEGER PRIMARY KEY, title TEXT, added_at TEXT)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS sent_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title_ar TEXT, source TEXT, url TEXT, sent_at TEXT)""")
+        title_ar TEXT, source TEXT, cat TEXT, url TEXT, sent_at TEXT)""")
     conn.commit(); conn.close()
-    logging.info("✅ DB جاهزة")
 
 def is_seen(url):
     try:
         conn = sqlite3.connect(DB_PATH)
-        r = conn.execute("SELECT 1 FROM seen WHERE url=?", (url,)).fetchone()
+        r    = conn.execute("SELECT 1 FROM seen WHERE url=?", (url,)).fetchone()
         conn.close(); return r is not None
     except: return False
 
@@ -301,12 +379,12 @@ def mark_seen(url):
         conn.commit(); conn.close()
     except: pass
 
-def save_sent(title_ar, source, url):
+def save_sent(title_ar, source, cat, url):
     try:
         now  = datetime.now(MECCA_TZ).strftime("%Y-%m-%d %H:%M")
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT INTO sent_items(title_ar,source,url,sent_at) VALUES(?,?,?,?)",
-                     (title_ar, source, url, now))
+        conn.execute("INSERT INTO sent_items(title_ar,source,cat,url,sent_at) VALUES(?,?,?,?,?)",
+                     (title_ar, source, cat, url, now))
         conn.commit(); conn.close()
     except: pass
 
@@ -337,13 +415,13 @@ def remove_channel(chat_id):
 # ─────────────────────────────────────────
 # مساعدات
 # ─────────────────────────────────────────
-def clean_html(text):
+def clean_html(text: str) -> str:
     if not text: return ""
     text = html_lib.unescape(text)
     text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
-def get_entry_text(entry):
+def get_entry_text(entry) -> str:
     content = ""
     if hasattr(entry, "content") and entry.content:
         content = entry.content[0].get("value", "")
@@ -360,7 +438,8 @@ def tg_send(chat_id, text):
     try:
         r = requests.post(f"{TG_API}/sendMessage",
                           json={"chat_id": chat_id, "text": text,
-                                "parse_mode": "HTML", "disable_web_page_preview": True},
+                                "parse_mode": "HTML",
+                                "disable_web_page_preview": True},
                           timeout=12)
         d = r.json()
         if not d.get("ok"):
@@ -373,7 +452,6 @@ def tg_send(chat_id, text):
         logging.warning(f"tg_send: {e}"); return False
 
 def tg_send_video(chat_id, video_path, caption):
-    """يرسل فيديو MP4 للمستخدم"""
     try:
         with open(video_path, "rb") as vf:
             r = requests.post(
@@ -402,7 +480,7 @@ def send_video_to_all(video_path, caption):
     if not chats:
         logging.warning("⚠️ لا قنوات"); return
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    logging.info(f"📤 إرسال فيديو {size_mb:.1f}MB → {len(chats)} قناة")
+    logging.info(f"📤 {size_mb:.1f}MB → {len(chats)} قناة")
     for cid in chats:
         tg_send_video(cid, video_path, caption)
         time.sleep(2)
@@ -439,12 +517,12 @@ def _handle(u):
         if status in ("member", "administrator"):
             add_channel(cid, title)
             tg_send(cid,
-                "📚 <b>مرحباً! بوت ملخصات الروايات العالمية</b>\n\n"
-                "أرسل لك يومياً فيديوهات مترجمة:\n"
-                "🎬 ملخص الرواية صوتاً وصورةً\n"
-                "🌐 مترجم للعربية بالكامل\n"
-                "📺 جاهز للنشر على يوتيوب\n\n"
-                "المصادر: Guardian • NPR • LiteraryHub وأكثر")
+                "📚 <b>مرحباً! بوت الروايات والتاريخ</b>\n\n"
+                "سأرسل لك فيديوهات مترجمة من:\n"
+                "🔍 روايات وقصص\n"
+                "⚔️ تاريخ وحضارات\n"
+                "📜 قصص تاريخية\n\n"
+                "🎬 كل فيديو: صوت عربي + صورة غلاف + 1280×720")
         elif status in ("left", "kicked"):
             remove_channel(cid)
 
@@ -457,32 +535,38 @@ def _handle(u):
             title = chat.get("title") or chat.get("first_name") or str(cid)
             add_channel(cid, title)
             tg_send(cid,
-                "📚 <b>أهلاً بك في بوت ملخصات الروايات!</b>\n\n"
-                "سأرسل لك <b>فيديوهات</b> ملخصات روايات مترجمة 🎬\n\n"
-                "كل فيديو يحتوي:\n"
-                "🖼️ صورة غلاف احترافية مع العنوان\n"
-                "🎙️ صوت عربي عالي الجودة\n"
-                "📺 1280×720 جاهز لليوتيوب\n\n"
+                "📚 <b>أهلاً بك في بوت الروايات والتاريخ!</b>\n\n"
+                "أرسل لك <b>فيديوهات مترجمة</b> عن:\n"
+                "🔍 الروايات والقصص والأدب\n"
+                "⚔️ التاريخ والحضارات\n\n"
+                "📺 كل فيديو جاهز للنشر على يوتيوب\n"
                 "⏱️ يتحقق كل 6 ساعات\n\n"
-                "/now — لجلب الملخصات الآن")
+                "/now — لجلب الفيديوهات الآن")
         elif text.startswith("/now"):
-            tg_send(cid, "🔄 جارٍ إنشاء الفيديوهات...")
+            tg_send(cid, "🔄 جارٍ البحث والإنشاء...")
             threading.Thread(target=story_cycle, daemon=True).start()
 
 # ─────────────────────────────────────────
 # الدورة الرئيسية
 # ─────────────────────────────────────────
 _cycle_lock = threading.Lock()
-_stats      = {"cycles": 0, "sent": 0}
+_stats      = {"cycles": 0, "sent": 0, "filtered": 0}
 
-def process_entry(entry, src):
-    """يعالج مقالاً واحداً ← فيديو ← إرسال"""
+def process_entry(entry, src: dict) -> bool:
     url   = getattr(entry, "link", "").strip()
     title = clean_html(getattr(entry, "title", ""))
     if not url or not title or is_seen(url):
         return False
 
-    mark_seen(url)   # تسجيل فوري قبل أي معالجة
+    # ── فلتر الفئة ──────────────────────────
+    body_raw = get_entry_text(entry)
+    if not is_relevant(title, body_raw):
+        logging.info(f"  ⛔ خارج الفئة: {title[:55]}")
+        mark_seen(url)        # نتجنب إعادة الفحص
+        _stats["filtered"] += 1
+        return False
+
+    mark_seen(url)
 
     # تاريخ النشر
     pub = getattr(entry, "published", "") or getattr(entry, "updated", "")
@@ -492,65 +576,66 @@ def process_entry(entry, src):
     except:
         pub_ar = datetime.now(MECCA_TZ).strftime("%d/%m/%Y")
 
-    # نص الملخص
-    body = get_entry_text(entry)
-    if not body:
+    if not body_raw:
         logging.info(f"  ⏭️ بدون نص: {title[:50]}")
         return False
 
     logging.info(f"  🌐 ترجمة: {title[:55]}")
 
-    # ترجمة
-    title_ar = translate_chunk(title[:200]) or title
+    # ── الترجمة ────────────────────────────
+    title_ar   = translate_chunk(title[:200])
     time.sleep(1)
-    summary_ar = translate(body)
+    summary_ar = translate(body_raw)
 
-    if not summary_ar:
+    # تحقق: يجب أن تكون الترجمة عربية
+    if not title_ar or not _is_arabic(title_ar):
+        logging.warning(f"  ❌ ترجمة العنوان فشلت: {title[:50]}")
+        return False
+    if not summary_ar or not _is_arabic(summary_ar):
+        logging.warning(f"  ❌ ترجمة الملخص فشلت: {title[:50]}")
         return False
 
-    # نص الفيديو الكامل = العنوان + الملخص
-    tts_text = f"{title_ar}. {summary_ar}"
+    logging.info(f"  ✅ مترجم: {title_ar[:55]}")
 
-    logging.info(f"  🎬 إنشاء فيديو: {title_ar[:55]}")
+    # ── إنشاء الفيديو ──────────────────────
+    cat    = src.get("cat", "novel")
     tmpdir = tempfile.mkdtemp()
+    img_p  = os.path.join(tmpdir, "thumb.png")
+    aud_p  = os.path.join(tmpdir, "audio.mp3")
+    vid_p  = os.path.join(tmpdir, "video.mp4")
 
     try:
-        img_path   = os.path.join(tmpdir, "thumb.png")
-        audio_path = os.path.join(tmpdir, "audio.mp3")
-        video_path = os.path.join(tmpdir, "video.mp4")
+        # صورة الغلاف
+        make_thumbnail(title_ar, src["name"], src["emoji"], cat, img_p)
 
-        # 1️⃣ صورة الغلاف
-        make_thumbnail(title_ar, src["name"], src["emoji"], img_path)
+        # الصوت
+        tts_text = f"{title_ar}. {summary_ar}"
+        text_to_audio(tts_text, aud_p)
+        if not os.path.exists(aud_p) or os.path.getsize(aud_p) < 1000:
+            logging.warning(f"  ❌ الصوت فارغ"); return False
 
-        # 2️⃣ الصوت
-        text_to_audio(tts_text, audio_path)
-        if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
-            logging.warning(f"  ❌ الصوت فارغ: {title_ar[:40]}")
-            return False
+        # الفيديو
+        if not make_video(img_p, aud_p, vid_p):
+            logging.warning(f"  ❌ ffmpeg فشل"); return False
 
-        # 3️⃣ الفيديو
-        if not make_video(img_path, audio_path, video_path):
-            logging.warning(f"  ❌ فشل ffmpeg: {title_ar[:40]}")
-            return False
-
-        # 4️⃣ الإرسال
-        caption = (
+        # الإرسال
+        cat_label = "تاريخ وحضارات" if cat == "history" else "روايات وقصص"
+        caption   = (
             f"{src['emoji']} <b>{title_ar}</b>\n\n"
-            f"📚 {src['name']}  |  📅 {pub_ar}"
+            f"📂 {cat_label}  |  📚 {src['name']}\n"
+            f"📅 {pub_ar}"
         )
-        send_video_to_all(video_path, caption)
-        save_sent(title_ar, src["name"], url)
+        send_video_to_all(vid_p, caption)
+        save_sent(title_ar, src["name"], cat, url)
         _stats["sent"] += 1
-        logging.info(f"  ✅ أُرسل: {title_ar[:55]}")
+        logging.info(f"  🎬 أُرسل: {title_ar[:55]}")
         return True
 
     except Exception as e:
         logging.error(f"  ❌ process_entry: {e}")
         return False
-
     finally:
-        # تنظيف الملفات المؤقتة
-        for f in [img_path, audio_path, video_path]:
+        for f in [img_p, aud_p, vid_p]:
             try: os.remove(f)
             except: pass
         try: os.rmdir(tmpdir)
@@ -567,41 +652,32 @@ def story_cycle():
                 r    = requests.get(src["url"], headers=FETCH_HEADERS, timeout=12)
                 feed = feedparser.parse(r.content)
                 if not feed.entries:
-                    logging.warning(f"⚠️ {src['name']}: لا مقالات"); continue
-
-                new_count = 0
-                for entry in feed.entries[:3]:   # أحدث 3 مقالات لكل مصدر
+                    logging.warning(f"⚠️ {src['name']}: فارغ"); continue
+                count = 0
+                for entry in feed.entries[:4]:
                     if process_entry(entry, src):
-                        new_count += 1; total += 1
-                        time.sleep(5)    # استراحة بين الفيديوهات
-
-                if new_count:
-                    logging.info(f"  📚 {src['name']}: {new_count} فيديو")
-
+                        count += 1; total += 1
+                        time.sleep(5)
+                if count:
+                    logging.info(f"  📚 {src['name']}: {count} فيديو")
             except Exception as e:
                 logging.warning(f"❌ {src['name']}: {e}")
-
         _stats["cycles"] += 1
-        logging.info(f"🏁 [Cycle] أُرسل {total} فيديو")
+        logging.info(f"🏁 [Cycle] أُرسل {total} | مُفلتر {_stats['filtered']}")
     finally:
         _cycle_lock.release()
 
 # ─────────────────────────────────────────
-# Scheduler
+# Scheduler + Self-Ping
 # ─────────────────────────────────────────
 def scheduler():
-    logging.info(f"⏱️ Scheduler: كل {CHECK_EVERY//3600} ساعات")
     while True:
         try: story_cycle()
         except Exception as e: logging.error(f"Scheduler: {e}")
         time.sleep(CHECK_EVERY)
 
-# ─────────────────────────────────────────
-# Self-Ping
-# ─────────────────────────────────────────
 def self_ping():
     if not RENDER_URL: return
-    logging.info(f"🏓 Self-ping: {RENDER_URL}")
     while True:
         time.sleep(4 * 60)
         try: requests.get(f"{RENDER_URL}/health", timeout=8)
@@ -621,7 +697,8 @@ def home():
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         conn.close()
     except: total = sent = chats = 0
-    return f"📚 Story Bot v8.0 | قنوات: {chats} | أُرسل: {sent} فيديو | معالج: {total}"
+    return (f"📚 Story Bot v9.0 | قنوات: {chats} | "
+            f"أُرسل: {sent} فيديو | معالج: {total}")
 
 @app.route("/health")
 def health():
@@ -640,13 +717,17 @@ def stats():
         sent  = conn.execute("SELECT COUNT(*) FROM sent_items").fetchone()[0]
         chats = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         last  = conn.execute(
-            "SELECT title_ar,source,sent_at FROM sent_items ORDER BY id DESC LIMIT 10"
+            "SELECT title_ar,source,cat,sent_at FROM sent_items ORDER BY id DESC LIMIT 10"
         ).fetchall()
         conn.close()
         return json.dumps({
-            "version": "8.0", "channels": chats, "sent": sent,
-            "seen": total, "cycles": _stats["cycles"],
-            "last_10": [{"title": r[0], "source": r[1], "at": r[2]} for r in last],
+            "version": "9.0", "channels": chats,
+            "sent": sent, "seen": total,
+            "filtered": _stats["filtered"], "cycles": _stats["cycles"],
+            "last_10": [
+                {"title": r[0], "source": r[1], "cat": r[2], "at": r[3]}
+                for r in last
+            ],
         }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
@@ -654,7 +735,8 @@ def stats():
 @app.route("/add/<int:chat_id>")
 def add_manual(chat_id):
     add_channel(chat_id, f"manual-{chat_id}")
-    return json.dumps({"ok": True, "chat_id": chat_id}), 200, {"Content-Type": "application/json"}
+    return json.dumps({"ok": True, "chat_id": chat_id}), 200, \
+           {"Content-Type": "application/json"}
 
 @app.route("/reset")
 def reset():
@@ -664,16 +746,37 @@ def reset():
         conn.execute("DELETE FROM seen")
         conn.execute("DELETE FROM sent_items")
         conn.commit(); conn.close()
-        return json.dumps({"ok": True, "deleted": c}), 200, {"Content-Type": "application/json"}
+        _stats["filtered"] = 0
+        return json.dumps({"ok": True, "deleted": c}), 200, \
+               {"Content-Type": "application/json"}
     except Exception as e:
         return json.dumps({"error": str(e)}), 500
 
 @app.route("/sources")
 def list_sources():
     return json.dumps(
-        [{"name": s["name"], "url": s["url"]} for s in SOURCES],
+        [{"name": s["name"], "cat": s["cat"]} for s in SOURCES],
         ensure_ascii=False, indent=2
     ), 200, {"Content-Type": "application/json"}
+
+@app.route("/filter-test")
+def filter_test():
+    """اختبار الفلتر على محتوى RSS الحالي"""
+    results = []
+    UA = FETCH_HEADERS
+    for src in SOURCES[:4]:
+        try:
+            r    = requests.get(src["url"], headers=UA, timeout=8)
+            feed = feedparser.parse(r.content)
+            for e in feed.entries[:3]:
+                t   = clean_html(e.get("title",""))
+                b   = get_entry_text(e)[:200]
+                rel = is_relevant(t, b)
+                results.append({"src": src["name"], "title": t[:60],
+                                 "pass": rel})
+        except: pass
+    return json.dumps(results, ensure_ascii=False, indent=2), 200, \
+           {"Content-Type": "application/json"}
 
 # ─────────────────────────────────────────
 # Startup
@@ -687,11 +790,10 @@ def _startup():
     threading.Thread(target=tg_poll,   daemon=True, name="poll").start()
     threading.Thread(target=scheduler, daemon=True, name="sched").start()
     threading.Thread(target=self_ping, daemon=True, name="ping").start()
-    logging.info("🚀 Story Bot v8.0 جاهز")
+    logging.info("🚀 Story Bot v9.0 جاهز | فلتر: روايات + قصص + تاريخ")
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
-# v8.0 force rebuild Fri Mar 27 08:52:45 UTC 2026
