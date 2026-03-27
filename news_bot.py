@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
-📚 Book Summary Bot v1.0
-=========================
-المصدر الوحيد : booksummaryclub.com
-- يجلب ملخصات الكتب من RSS + صفحة المقالة الكاملة
-- يترجمها كاملةً بـ Llama 3.3 (أدبي احترافي)
-- يرسلها لقناة تيليغرام
-- يتجنب تكرار المقالات المُرسَلة
-- يفحص الموقع كل 6 ساعات تلقائياً
+📚 Novel Summary Bot v2.0
+==========================
+• يختار رواية كلاسيكية من Gutendex (Project Gutenberg)
+• يقرأها كاملةً ويقسّمها إلى فصولها الحقيقية
+• يلخّص كل فصل تلخيصاً أدبياً احترافياً باستخدام GPT-4o
+• يرسل ملخص كل فصل على حدة إلى تيليغرام
+• أوامر: "جديد" | "ستب"
+• إشارة اكتمال عند انتهاء جميع الفصول
 """
 
-import os, json, logging, sqlite3, re, time, threading
+import os, json, logging, sqlite3, re, time, threading, random
 from datetime import datetime, timezone, timedelta
 
 import requests
-import feedparser
-from bs4 import BeautifulSoup
 from flask import Flask
 
 try:
@@ -41,17 +39,42 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 RENDER_URL   = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
 DEFAULT_CHAT = int(os.environ.get("DEFAULT_CHAT_ID", "0"))
 
-DB_PATH   = "/tmp/summarybot.db"
-MECCA_TZ  = timezone(timedelta(hours=3))
-TG_API    = f"https://api.telegram.org/bot{BOT_TOKEN}"
-UA        = "Mozilla/5.0 (compatible; SummaryBot/1.0)"
+DB_PATH    = "/tmp/novelbot.db"
+MECCA_TZ   = timezone(timedelta(hours=3))
+TG_API     = f"https://api.telegram.org/bot{BOT_TOKEN}"
+UA         = "Mozilla/5.0 (compatible; NovelSummaryBot/2.0)"
 
-RSS_URL       = "https://www.booksummaryclub.com/feed/"
-CHECK_EVERY   = 6 * 3600   # فحص كل 6 ساعات
+# أفضل نموذج للتلخيص الأدبي الاحترافي
+AI_MODELS = [
+    "gpt-4o",                        # الأفضل
+    "Meta-Llama-3.3-70B-Instruct",   # fallback أول
+    "Meta-Llama-3.1-405B-Instruct",  # fallback ثاني
+]
 
-LLAMA_PRIMARY  = "Meta-Llama-3.3-70B-Instruct"
-LLAMA_FALLBACK = "Meta-Llama-3.1-405B-Instruct"
-TG_MSG         = 3_800     # حد رسالة تيليغرام
+TG_MSG       = 3_800   # حد رسالة تيليغرام
+CHAPTER_DELAY = 90     # ثانية بين إرسال كل فصل
+CHAPTER_MAX   = 12_000 # حد أقصى لنص الفصل المُرسَل للذكاء الاصطناعي
+
+TOPICS = [
+    "fiction", "adventure", "mystery", "detective",
+    "romance", "gothic", "historical+fiction", "horror",
+]
+
+# قائمة روايات مثبّتة (Gutenberg IDs) للاختيار منها احتياطاً
+FALLBACK_NOVELS = [
+    (84,   "Frankenstein",            "Mary Shelley"),
+    (98,   "A Tale of Two Cities",    "Charles Dickens"),
+    (1342, "Pride and Prejudice",     "Jane Austen"),
+    (11,   "Alice in Wonderland",     "Lewis Carroll"),
+    (74,   "The Adventures of Tom Sawyer", "Mark Twain"),
+    (1400, "Great Expectations",      "Charles Dickens"),
+    (2701, "Moby Dick",               "Herman Melville"),
+    (345,  "Dracula",                 "Bram Stoker"),
+    (1661, "The Adventures of Sherlock Holmes", "Arthur Conan Doyle"),
+    (5200, "Metamorphosis",           "Franz Kafka"),
+    (174,  "The Picture of Dorian Gray", "Oscar Wilde"),
+    (1260, "Jane Eyre",               "Charlotte Brontë"),
+]
 
 # ─────────────────────────────────────────────────────
 # قاعدة البيانات
@@ -64,13 +87,31 @@ def init_db():
                 title    TEXT,
                 added_at TEXT
             );
-            CREATE TABLE IF NOT EXISTS seen (
-                url      TEXT PRIMARY KEY,
-                title    TEXT,
-                sent_at  TEXT
+            CREATE TABLE IF NOT EXISTS novels (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                gid          INTEGER UNIQUE,
+                title        TEXT,
+                author       TEXT,
+                cover_url    TEXT,
+                title_ar     TEXT   DEFAULT '',
+                author_ar    TEXT   DEFAULT '',
+                status       TEXT   DEFAULT 'idle',
+                total_chaps  INTEGER DEFAULT 0,
+                selected_at  TEXT
+            );
+            CREATE TABLE IF NOT EXISTS chapters (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                novel_id   INTEGER,
+                num        INTEGER,
+                title_en   TEXT,
+                text_en    TEXT,
+                summary_ar TEXT   DEFAULT '',
+                status     TEXT   DEFAULT 'pending',
+                FOREIGN KEY(novel_id) REFERENCES novels(id)
             );
         """)
 
+# ── قنوات ────────────────────────────────────────────
 def get_channels():
     try:
         with sqlite3.connect(DB_PATH) as c:
@@ -86,7 +127,6 @@ def add_channel(cid, title=""):
                 "INSERT OR IGNORE INTO channels(chat_id,title,added_at) VALUES(?,?,?)",
                 (cid, title, now),
             )
-        logging.info(f"➕ قناة: {title} ({cid})")
     except:
         pass
 
@@ -97,176 +137,272 @@ def remove_channel(cid):
     except:
         pass
 
-def is_seen(url):
-    try:
-        with sqlite3.connect(DB_PATH) as c:
-            return bool(c.execute("SELECT 1 FROM seen WHERE url=?", (url,)).fetchone())
-    except:
-        return False
+# ── روايات وفصول ─────────────────────────────────────
+def save_novel(gid, title, author, cover_url):
+    now = datetime.now(MECCA_TZ).strftime("%Y-%m-%d %H:%M")
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            "INSERT OR IGNORE INTO novels(gid,title,author,cover_url,status,selected_at)"
+            " VALUES(?,?,?,?,'preparing',?)",
+            (gid, title, author, cover_url, now),
+        )
+        return c.execute("SELECT id FROM novels WHERE gid=?", (gid,)).fetchone()[0]
 
-def mark_seen(url, title):
+def save_chapters(novel_id, chapters):
+    with sqlite3.connect(DB_PATH) as c:
+        c.executemany(
+            "INSERT INTO chapters(novel_id,num,title_en,text_en) VALUES(?,?,?,?)",
+            [(novel_id, i+1, ch["title"], ch["text"]) for i, ch in enumerate(chapters)],
+        )
+        c.execute(
+            "UPDATE novels SET total_chaps=?,status='ready' WHERE id=?",
+            (len(chapters), novel_id),
+        )
+
+def update_novel(novel_id, **kw):
+    sets = ", ".join(f"{k}=?" for k in kw)
+    vals = list(kw.values()) + [novel_id]
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(f"UPDATE novels SET {sets} WHERE id=?", vals)
+
+def get_next_chapter(novel_id):
+    with sqlite3.connect(DB_PATH) as c:
+        row = c.execute(
+            "SELECT id,num,title_en,text_en FROM chapters "
+            "WHERE novel_id=? AND status='pending' ORDER BY num LIMIT 1",
+            (novel_id,),
+        ).fetchone()
+    if row:
+        return {"id": row[0], "num": row[1], "title": row[2], "text": row[3]}
+    return None
+
+def mark_chapter(chap_id, summary_ar):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            "UPDATE chapters SET status='sent', summary_ar=? WHERE id=?",
+            (summary_ar, chap_id),
+        )
+
+def count_done(novel_id):
+    with sqlite3.connect(DB_PATH) as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM chapters WHERE novel_id=? AND status='sent'",
+            (novel_id,),
+        ).fetchone()[0]
+
+# ─────────────────────────────────────────────────────
+# Gutendex + Project Gutenberg
+# ─────────────────────────────────────────────────────
+def pick_novel_gutendex():
+    """يختار رواية عشوائية من Gutendex"""
+    topic = random.choice(TOPICS)
+    page  = random.randint(1, 6)
+    logging.info(f"🔍 Gutendex [{topic}] صفحة {page}…")
     try:
-        now = datetime.now(MECCA_TZ).strftime("%Y-%m-%d %H:%M")
+        r = requests.get(
+            "https://gutendex.com/books/",
+            params={"topic": topic, "languages": "en", "page": page},
+            headers={"User-Agent": UA}, timeout=50,
+        )
+        if r.status_code != 200:
+            return None
+        results = r.json().get("results", [])
+        random.shuffle(results)
+        for book in results:
+            fmts = book.get("formats", {})
+            txt  = next((u for f, u in fmts.items() if "text/plain" in f), None)
+            if not txt:
+                continue
+            gid    = book["id"]
+            title  = book.get("title", "").strip()
+            author = ", ".join(a["name"] for a in book.get("authors", [])[:2])
+            cover  = next((u for f, u in fmts.items() if "image/jpeg" in f),
+                          f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg")
+            # تحقق: لم تُستخدم من قبل
+            with sqlite3.connect(DB_PATH) as c:
+                if c.execute("SELECT 1 FROM novels WHERE gid=?", (gid,)).fetchone():
+                    continue
+            return {"gid": gid, "title": title, "author": author,
+                    "cover": cover, "txt_url": txt}
+    except Exception as ex:
+        logging.warning(f"Gutendex: {ex}")
+    return None
+
+def pick_novel_fallback():
+    """يختار من قائمة الروايات الثابتة"""
+    used = set()
+    try:
         with sqlite3.connect(DB_PATH) as c:
-            c.execute(
-                "INSERT OR IGNORE INTO seen(url,title,sent_at) VALUES(?,?,?)",
-                (url, title, now),
-            )
+            used = {r[0] for r in c.execute("SELECT gid FROM novels")}
     except:
         pass
+    pool = [n for n in FALLBACK_NOVELS if n[0] not in used]
+    if not pool:
+        pool = FALLBACK_NOVELS
+    gid, title, author = random.choice(pool)
+    cover = f"https://www.gutenberg.org/cache/epub/{gid}/pg{gid}.cover.medium.jpg"
+    txt_url = f"https://www.gutenberg.org/ebooks/{gid}.txt.utf-8"
+    return {"gid": gid, "title": title, "author": author,
+            "cover": cover, "txt_url": txt_url}
 
-# ─────────────────────────────────────────────────────
-# جلب المحتوى من الموقع
-# ─────────────────────────────────────────────────────
-def get_rss_entries():
-    """جلب المقالات الجديدة من RSS"""
-    try:
-        feed = feedparser.parse(RSS_URL)
-        entries = []
-        for e in feed.entries:
-            url   = e.get("link", "")
-            title = e.get("title", "").strip()
-            if url and title:
-                entries.append({"url": url, "title": title})
-        logging.info(f"📡 RSS: {len(entries)} مقالة")
-        return entries
-    except Exception as ex:
-        logging.warning(f"RSS: {ex}")
-        return []
+def download_text(url):
+    """تحميل النص من Project Gutenberg"""
+    r = requests.get(url, headers={"User-Agent": UA}, timeout=50)
+    r.encoding = r.apparent_encoding or "utf-8"
+    text = r.text
 
-def fetch_full_content(url):
-    """جلب الملخص الكامل من صفحة المقالة"""
-    try:
-        r = requests.get(url, headers={"User-Agent": UA}, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+    # إزالة ترويسة وذيل Gutenberg
+    for m in ["*** START OF THE PROJECT GUTENBERG EBOOK",
+              "*** START OF THIS PROJECT GUTENBERG EBOOK"]:
+        idx = text.find(m)
+        if idx != -1:
+            text = text[text.find("\n", idx) + 1:]
+            break
+    for m in ["*** END OF THE PROJECT GUTENBERG EBOOK",
+              "*** END OF THIS PROJECT GUTENBERG EBOOK",
+              "End of the Project Gutenberg", "End of Project Gutenberg"]:
+        idx = text.find(m)
+        if idx != -1:
+            text = text[:idx]
+            break
 
-        # استخراج الصورة الرئيسية
-        img_url = ""
-        og_img = soup.find("meta", property="og:image")
-        if og_img:
-            img_url = og_img.get("content", "")
+    return re.sub(r"\n{4,}", "\n\n\n", re.sub(r"\r\n", "\n", text)).strip()
 
-        # استخراج محتوى المقالة
-        article = (
-            soup.find("div", class_=re.compile(r"entry-content|post-content|article-content"))
-            or soup.find("article")
-        )
-        if not article:
-            return None
+def split_chapters(text):
+    """
+    يقسّم النص إلى فصوله الحقيقية.
+    يدعم أنماطاً متعددة: CHAPTER I / Chapter 1 / BOOK I / PART ONE
+    إذا لم توجد فصول → يقسّم إلى أقسام بالحجم.
+    """
+    chap_re = re.compile(
+        r"\n\s{0,4}("
+        r"CHAPTER\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r"|Chapter\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r"|BOOK\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r"|Book\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r"|PART\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r"|Part\s+(?:One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|[IVXLC\d]+)\.?[^\n]{0,60}"
+        r"|ADVENTURE\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r"|SECTION\s+[IVXLC\d]+\.?[^\n]{0,80}"
+        r")\n",
+        re.MULTILINE,
+    )
 
-        # تنظيف العناصر غير المرغوبة
-        for tag in article(["script", "style", "nav", "aside", "footer",
-                             "form", "iframe", ".sharedaddy", ".jp-relatedposts"]):
-            tag.decompose()
+    matches = list(chap_re.finditer(text))
 
-        # استخراج النص
-        text = article.get_text(separator="\n", strip=True)
+    # هل الفصول في النصف الأول فقط؟ (قد تكون فهرساً)
+    if matches:
+        real = [m for m in matches if m.start() > len(text) * 0.05]
+        if len(real) >= 2:
+            matches = real
 
-        # تنظيف: احذف الأسطر القصيرة جداً والروابط
-        lines = [l.strip() for l in text.split("\n") if len(l.strip()) > 40]
-        clean = "\n\n".join(lines)
+    if len(matches) >= 2:
+        chapters = []
+        for i, m in enumerate(matches):
+            title_line = m.group(1).strip()
+            start = m.end()
+            end   = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            body  = text[start:end].strip()
+            if len(body) < 200:
+                continue
+            chapters.append({"title": title_line, "text": body})
+        if chapters:
+            logging.info(f"📑 تقسيم بالفصول: {len(chapters)} فصل")
+            return chapters
 
-        logging.info(f"  📄 محتوى: {len(clean)} حرف")
-        return {"text": clean, "img": img_url}
-
-    except Exception as ex:
-        logging.warning(f"fetch [{url}]: {ex}")
-        return None
-
-# ─────────────────────────────────────────────────────
-# الترجمة
-# ─────────────────────────────────────────────────────
-_SYS_PROMPT = """أنت مترجم أدبي محترف متخصص في ملخصات الكتب والروايات.
-
-أسلوبك:
-- عربية فصحى سلسة وجذابة، ليست حرفية
-- احتفظ بحماس النص وأسلوبه الترويجي
-- حافظ على أسماء الكتب والمؤلفين كما هي أو عرِّبها صوتياً
-- أخرج الترجمة فقط بلا تعليقات"""
-
-def translate(text, prev_ctx=""):
-    """يترجم النص كاملاً — Llama أولاً ثم Google كـ fallback"""
-    if not text.strip():
-        return ""
-
-    # تقسيم إلى أجزاء 4000 حرف مع سياق متصل
-    chunks = _split_chunks(text, 4000)
-    result = []
-    context = prev_ctx
-
-    for i, chunk in enumerate(chunks):
-        logging.info(f"  🧠 ترجمة جزء {i+1}/{len(chunks)} ({len(chunk)} حرف)…")
-        ar = _translate_chunk(chunk, context)
-        if ar:
-            result.append(ar)
-            context = ar[-400:]   # آخر 400 حرف = سياق للجزء التالي
-        time.sleep(1)
-
-    return "\n\n".join(result)
-
-def _split_chunks(text, size):
-    """تقسيم النص إلى أجزاء ≤ size حرف على حدود الفقرات"""
-    if len(text) <= size:
-        return [text]
-    chunks, cur = [], ""
-    for para in text.split("\n\n"):
-        if len(cur) + len(para) + 2 <= size:
+    # لا فصول واضحة → تقسيم بالحجم (كل 8000 حرف = قسم)
+    logging.info("📑 لا فصول → تقسيم بالحجم")
+    section_size = 8_000
+    paragraphs   = text.split("\n\n")
+    sections, cur = [], ""
+    sec_num = 1
+    for para in paragraphs:
+        if len(cur) + len(para) + 2 <= section_size:
             cur = (cur + "\n\n" + para).strip() if cur else para
         else:
-            if cur:
-                chunks.append(cur)
-            cur = para if len(para) <= size else para[:size]
-    if cur:
-        chunks.append(cur)
-    return chunks
+            if len(cur) > 500:
+                sections.append({"title": f"القسم {sec_num}", "text": cur})
+                sec_num += 1
+            cur = para
+    if len(cur) > 500:
+        sections.append({"title": f"القسم {sec_num}", "text": cur})
+    return sections
 
-def _translate_chunk(text, prev_ar=""):
-    """ترجمة جزء واحد"""
-    user_msg = text
-    if prev_ar.strip():
-        user_msg = (
-            f"[سياق سابق للاستمرارية — لا تُعِد ترجمته]\n{prev_ar}\n\n"
-            f"[النص الجديد]\n{text}"
-        )
+# ─────────────────────────────────────────────────────
+# الذكاء الاصطناعي — تلخيص الفصول
+# ─────────────────────────────────────────────────────
+_SYS_SUMMARY = """أنت ناقد أدبي وباحث متخصص في الأدب الكلاسيكي العالمي.
 
-    # Llama
-    if GITHUB_TOKEN and _OAI_OK:
-        client = _OAI(
-            base_url="https://models.inference.ai.azure.com",
-            api_key=GITHUB_TOKEN,
-        )
-        for model in [LLAMA_PRIMARY, LLAMA_FALLBACK]:
-            for attempt in range(2):
-                try:
-                    resp = client.chat.completions.create(
-                        model=model,
-                        messages=[
-                            {"role": "system", "content": _SYS_PROMPT},
-                            {"role": "user",   "content": user_msg},
-                        ],
-                        max_tokens=2048,
-                        temperature=0.3,
-                    )
-                    ar = resp.choices[0].message.content.strip()
-                    if ar and _has_arabic(ar):
-                        return ar
-                except Exception as ex:
-                    logging.warning(f"  Llama [{attempt+1}]: {ex}")
-                    time.sleep(3)
+مهمتك: كتابة ملخص شامل ومفصّل لفصل من رواية، بالعربية الفصحى الجميلة.
 
-    # Google Translate fallback
-    return _gtr(text)
+يجب أن يتضمن ملخصك:
+١. **الأحداث الرئيسية** — بترتيبها مع تفاصيل مهمة
+٢. **الشخصيات** — تصرفاتها، مشاعرها، تطورها في هذا الفصل
+٣. **الحوارات المحورية** — أبرز ما قيل وما يكشفه
+٤. **التوتر الدرامي** — اللحظات المشحونة والتحولات المفصلية
+٥. **الدلالات والرموز** — إن وجدت في النص
+٦. **ختام الفصل** — بماذا ينتهي وكيف يفتح شهية القارئ للتالي
 
-def _gtr(text):
+الأسلوب: فقرات متدفقة، لغة أدبية راقية، تفاصيل كافية تجعل القارئ يعيش الفصل.
+لا قوائم نقطية. لا عناوين فرعية. نص أدبي متواصل."""
+
+def summarize_chapter(title, text_en, novel_title, author):
+    """
+    يلخّص فصلاً واحداً بـ GPT-4o (أو Llama كـ fallback).
+    يُرسِل ما يصل إلى CHAPTER_MAX حرف من نص الفصل.
+    """
+    # إذا الفصل طويل جداً → خذ الجزء الأهم (بداية + نهاية)
+    body = text_en.strip()
+    if len(body) > CHAPTER_MAX:
+        half = CHAPTER_MAX // 2
+        body = body[:half] + "\n\n[...]\n\n" + body[-half:]
+
+    user_msg = (
+        f"الرواية: «{novel_title}» — {author}\n"
+        f"الفصل: {title}\n\n"
+        f"نص الفصل:\n{body}"
+    )
+
+    if not GITHUB_TOKEN or not _OAI_OK:
+        logging.warning("  ⚠️ لا GITHUB_TOKEN — Google Translate فقط")
+        return _simple_translate(text_en[:3000])
+
+    client = _OAI(
+        base_url="https://models.inference.ai.azure.com",
+        api_key=GITHUB_TOKEN,
+    )
+
+    for model in AI_MODELS:
+        for attempt in range(3):
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": _SYS_SUMMARY},
+                        {"role": "user",   "content": user_msg},
+                    ],
+                    max_tokens=1500,
+                    temperature=0.4,
+                )
+                ar = resp.choices[0].message.content.strip()
+                if ar and _has_arabic(ar):
+                    logging.info(f"  🧠 [{model[:18]}]: {len(ar)} حرف")
+                    return ar
+            except Exception as ex:
+                logging.warning(f"  AI [{model[:18]}][{attempt+1}]: {ex}")
+                time.sleep(4 * (attempt + 1))
+
+    return _simple_translate(text_en[:3000])
+
+def _simple_translate(text):
+    """ترجمة بسيطة كـ fallback أخير"""
     for _ in range(3):
         try:
             r = requests.get(
                 "https://translate.googleapis.com/translate_a/single",
                 params={"client": "gtx", "sl": "en", "tl": "ar",
                         "dt": "t", "q": text[:4800]},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=20,
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=20,
             )
             if r.status_code == 200:
                 t = "".join(p[0] for p in r.json()[0] if p[0]).strip()
@@ -279,9 +415,7 @@ def _gtr(text):
 
 def _has_arabic(text):
     alpha = [c for c in text if c.isalpha()]
-    if not alpha:
-        return False
-    return sum(1 for c in alpha if "\u0600" <= c <= "\u06ff") / len(alpha) > 0.25
+    return bool(alpha) and sum(1 for c in alpha if "\u0600" <= c <= "\u06ff") / len(alpha) > 0.3
 
 # ─────────────────────────────────────────────────────
 # Telegram
@@ -327,7 +461,6 @@ def broadcast_photo(photo_url, caption):
         time.sleep(0.5)
 
 def split_tg(text, max_len=TG_MSG):
-    """تقسيم النص لرسائل تيليغرام"""
     if len(text) <= max_len:
         return [text]
     parts, cur = [], ""
@@ -343,101 +476,199 @@ def split_tg(text, max_len=TG_MSG):
     return parts or [text[:max_len]]
 
 # ─────────────────────────────────────────────────────
-# معالجة المقالة ونشرها
+# Worker الرئيسي
 # ─────────────────────────────────────────────────────
-def process_entry(entry):
-    """جلب → ترجمة → إرسال مقالة واحدة"""
-    url   = entry["url"]
-    title = entry["title"]
+_worker_thread = None
+_stop_event    = threading.Event()
 
-    if is_seen(url):
-        return False
+def _worker(novel_id):
+    global _stop_event
 
-    logging.info(f"📖 معالجة: {title}")
+    with sqlite3.connect(DB_PATH) as c:
+        row = c.execute(
+            "SELECT title, title_ar, author, total_chaps FROM novels WHERE id=?",
+            (novel_id,),
+        ).fetchone()
+    if not row:
+        return
+    title, title_ar, author, total = row
+    label = title_ar or title
 
-    # جلب المحتوى الكامل
-    content = fetch_full_content(url)
-    if not content or not content["text"]:
-        logging.warning(f"  ❌ لا محتوى")
-        return False
+    update_novel(novel_id, status="summarizing")
+    logging.info(f"🚀 Worker بدأ: «{title}» — {total} فصل")
 
-    text_en = content["text"]
-    img_url = content["img"]
+    while not _stop_event.is_set():
+        chap = get_next_chapter(novel_id)
+        if not chap:
+            _on_complete(novel_id, label, total)
+            return
 
-    # ترجمة العنوان
-    title_ar = _gtr(title[:200]) or title
-    logging.info(f"  📝 العنوان: {title_ar[:60]}")
+        num   = chap["num"]
+        ctitle = chap["title"]
+        logging.info(f"  📖 فصل {num}/{total}: {ctitle[:50]}")
 
-    # ترجمة المحتوى الكامل
-    logging.info(f"  🌐 ترجمة {len(text_en)} حرف…")
-    text_ar = translate(text_en)
+        # ترجمة عنوان الفصل
+        ctitle_ar = _simple_translate(ctitle[:150]) or ctitle
 
-    if not text_ar or not _has_arabic(text_ar):
-        logging.warning(f"  ❌ الترجمة فشلت")
-        return False
+        # تلخيص الفصل
+        summary = summarize_chapter(ctitle, chap["text"], title, author)
+        if not summary:
+            logging.warning(f"  ❌ تخطي الفصل {num}")
+            mark_chapter(chap["id"], "")
+            continue
 
-    logging.info(f"  ✅ الترجمة: {len(text_ar)} حرف عربي")
+        # بناء الرسالة
+        done    = count_done(novel_id)
+        msg_header = (
+            f"📖 <b>{label}</b>\n"
+            f"{'─' * 26}\n"
+            f"<b>الفصل {num}: {ctitle_ar}</b>\n"
+            f"{'─' * 26}\n\n"
+        )
 
-    # إرسال الصورة + العنوان أولاً
-    today = datetime.now(MECCA_TZ).strftime("%d/%m/%Y")
-    header = (
+        parts = split_tg(summary)
+
+        # الجزء الأول يحمل العنوان
+        broadcast(msg_header + parts[0])
+        for part in parts[1:]:
+            time.sleep(3)
+            broadcast(part)
+
+        mark_chapter(chap["id"], summary)
+        logging.info(f"  ✅ أُرسل الفصل {num}")
+
+        if not _stop_event.is_set():
+            time.sleep(CHAPTER_DELAY)
+
+    # إيقاف
+    if _stop_event.is_set():
+        update_novel(novel_id, status="stopped")
+        broadcast(
+            f"⏹️ <b>توقفت عند الفصل {count_done(novel_id)}</b>\n\n"
+            f"أرسل <b>جديد</b> لرواية أخرى أو <b>استمر</b> لمتابعة هذه الرواية."
+        )
+
+def _on_complete(novel_id, title_ar, total):
+    update_novel(novel_id, status="complete")
+    broadcast(
+        f"{'═' * 26}\n"
+        f"✅ <b>اكتملت جميع فصول الرواية</b>\n"
+        f"{'═' * 26}\n\n"
         f"📚 <b>{title_ar}</b>\n"
-        f"{'─' * 25}\n"
-        f"📅 {today}  •  📡 booksummaryclub.com"
+        f"📊 {total} فصل — ملخص شامل لكل فصل\n\n"
+        f"🎉 شكراً لمتابعتكم!\n\n"
+        f"أرسل <b>جديد</b> لبدء رواية جديدة 📖"
+    )
+    logging.info(f"🎊 اكتملت: «{title_ar}»")
+
+def cmd_new():
+    """ينفَّذ في خيط منفصل عند أمر 'جديد'"""
+    global _worker_thread, _stop_event
+
+    _stop_event.set()
+    if _worker_thread and _worker_thread.is_alive():
+        _worker_thread.join(timeout=8)
+    _stop_event = threading.Event()
+
+    broadcast("🔍 <b>جارٍ اختيار رواية جديدة…</b>")
+
+    # اختيار الرواية
+    meta = pick_novel_gutendex() or pick_novel_fallback()
+    if not meta:
+        broadcast("⚠️ خطأ في الاختيار. أعِد المحاولة.")
+        return
+
+    broadcast(f"⬇️ <b>تحميل:</b> «{meta['title']}» بقلم {meta['author']}…")
+
+    # تحميل النص
+    try:
+        text = download_text(meta["txt_url"])
+    except Exception as ex:
+        broadcast(f"⚠️ فشل التحميل: {ex}")
+        return
+
+    if len(text) < 3_000:
+        broadcast("⚠️ النص قصير جداً. أعِد المحاولة.")
+        return
+
+    logging.info(f"📥 النص: {len(text):,} حرف")
+
+    # تقسيم الفصول
+    chapters = split_chapters(text)
+    if not chapters:
+        broadcast("⚠️ تعذّر تقسيم الفصول. أعِد المحاولة.")
+        return
+
+    # حد أقصى 30 فصلاً (لتجنب إرسال مئات الرسائل)
+    if len(chapters) > 30:
+        chapters = chapters[:30]
+
+    # حفظ في DB
+    try:
+        novel_id = save_novel(meta["gid"], meta["title"], meta["author"], meta["cover"])
+        save_chapters(novel_id, chapters)
+    except Exception as ex:
+        logging.error(f"DB save: {ex}")
+        broadcast("⚠️ خطأ في قاعدة البيانات.")
+        return
+
+    # ترجمة العنوان والمؤلف
+    title_ar  = _simple_translate(meta["title"][:200]) or meta["title"]
+    author_ar = _simple_translate(meta["author"][:100]) if meta["author"] else ""
+    update_novel(novel_id, title_ar=title_ar, author_ar=author_ar)
+
+    # إرسال رسالة التعريف مع الغلاف
+    intro = _build_intro(meta, title_ar, author_ar, len(chapters))
+    broadcast_photo(meta["cover"], intro)
+    time.sleep(3)
+
+    # إطلاق Worker
+    _worker_thread = threading.Thread(
+        target=_worker, args=(novel_id,), daemon=True, name="worker"
+    )
+    _worker_thread.start()
+    logging.info(f"▶️ Worker انطلق: #{novel_id} «{meta['title']}» — {len(chapters)} فصل")
+
+def _build_intro(meta, title_ar, author_ar, total_chaps):
+    model_label = AI_MODELS[0] if (GITHUB_TOKEN and _OAI_OK) else "Google Translate"
+    return (
+        f"📚 <b>رواية جديدة</b>\n{'━' * 24}\n\n"
+        f"📖 <b>{title_ar}</b>\n"
+        f"✍️ <i>{author_ar or meta['author']}</i>\n\n"
+        f"{'─' * 24}\n"
+        f"📑 عدد الفصول: <b>{total_chaps} فصل</b>\n"
+        f"🧠 التلخيص بـ: <b>{model_label}</b>\n"
+        f"⏱️ فصل كل <b>{CHAPTER_DELAY//60} دقيقة</b>\n"
+        f"{'─' * 24}\n\n"
+        f"🔜 <i>يبدأ التلخيص الآن…</i>\n\n"
+        f"<b>أوامر:</b>\n"
+        f"⏹️ <b>ستب</b> — إيقاف | 📖 <b>جديد</b> — رواية أخرى"
     )
 
-    if img_url:
-        broadcast_photo(img_url, header)
-    else:
-        broadcast(header)
+def cmd_stop():
+    _stop_event.set()
+    logging.info("⏹️ أمر الإيقاف")
 
-    time.sleep(2)
-
-    # إرسال الملخص المترجم (مقسَّم إن احتاج)
-    parts = split_tg(text_ar)
-    logging.info(f"  📤 إرسال {len(parts)} رسالة…")
-    for i, part in enumerate(parts):
-        broadcast(part)
-        if i < len(parts) - 1:
-            time.sleep(3)
-
-    mark_seen(url, title)
-    logging.info(f"  ✅ أُرسل بنجاح")
-    return True
-
-# ─────────────────────────────────────────────────────
-# حلقة الجلب التلقائي
-# ─────────────────────────────────────────────────────
-_checking = False
-
-def check_and_send():
-    global _checking
-    if _checking:
-        return
-    _checking = True
+def cmd_resume():
+    """يتابع الرواية الحالية إن كانت موقوفة"""
+    global _worker_thread, _stop_event
     try:
-        entries = get_rss_entries()
-        new_count = 0
-        for entry in entries:
-            if not is_seen(entry["url"]):
-                ok = process_entry(entry)
-                if ok:
-                    new_count += 1
-                    time.sleep(5)  # فاصل بين مقالتين
-        logging.info(f"✅ دورة فحص: {new_count} ملخص جديد أُرسل")
-    except Exception as ex:
-        logging.error(f"check_and_send: {ex}")
-    finally:
-        _checking = False
-
-def scheduler_loop():
-    """يفحص الموقع كل CHECK_EVERY ثانية"""
-    while True:
-        try:
-            check_and_send()
-        except Exception as ex:
-            logging.error(f"scheduler: {ex}")
-        time.sleep(CHECK_EVERY)
+        with sqlite3.connect(DB_PATH) as c:
+            row = c.execute(
+                "SELECT id FROM novels WHERE status='stopped' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if not row:
+            return False
+        novel_id = row[0]
+        _stop_event = threading.Event()
+        update_novel(novel_id, status="summarizing")
+        _worker_thread = threading.Thread(
+            target=_worker, args=(novel_id,), daemon=True, name="worker"
+        )
+        _worker_thread.start()
+        return True
+    except:
+        return False
 
 # ─────────────────────────────────────────────────────
 # Telegram Polling
@@ -467,20 +698,15 @@ def tg_poll():
 
 def _handle(u):
     if "my_chat_member" in u:
-        mc     = u["my_chat_member"]
-        chat   = mc["chat"]
-        status = mc["new_chat_member"]["status"]
-        cid    = chat["id"]
-        title  = chat.get("title") or chat.get("username") or str(cid)
-        if status in ("member", "administrator"):
+        mc    = u["my_chat_member"]
+        chat  = mc["chat"]
+        st    = mc["new_chat_member"]["status"]
+        cid   = chat["id"]
+        title = chat.get("title") or chat.get("username") or str(cid)
+        if st in ("member", "administrator"):
             add_channel(cid, title)
-            tg_send(cid,
-                "📚 <b>مرحباً في بوت ملخصات الكتب!</b>\n\n"
-                "يُرسل لك ملخصات كتب مترجمة للعربية\n"
-                "من موقع booksummaryclub.com\n\n"
-                "/now — اجلب أحدث الملخصات الآن\n"
-                "/status — إحصائيات البوت")
-        elif status in ("left", "kicked"):
+            _send_welcome(cid)
+        elif st in ("left", "kicked"):
             remove_channel(cid)
 
     if "message" not in u:
@@ -494,38 +720,83 @@ def _handle(u):
     if text.startswith("/start"):
         title = chat.get("title") or chat.get("first_name") or str(cid)
         add_channel(cid, title)
-        tg_send(cid,
-            "📚 <b>بوت ملخصات الكتب</b>\n"
-            f"{'━' * 22}\n\n"
-            "📡 المصدر: booksummaryclub.com\n"
-            "🧠 الترجمة: Llama 3.3 (أدبية احترافية)\n"
-            "🔄 يفحص تلقائياً كل 6 ساعات\n\n"
-            "<b>الأوامر:</b>\n"
-            "/now — اجلب الآن\n"
-            "/status — الإحصائيات")
+        _send_welcome(cid)
 
-    elif text.startswith("/now"):
+    elif text in ("جديد", "جديده", "جديدة", "new", "New", "NEW"):
         title = chat.get("title") or chat.get("first_name") or str(cid)
         add_channel(cid, title)
-        tg_send(cid, "🔄 <b>جارٍ جلب أحدث الملخصات…</b>")
-        threading.Thread(target=check_and_send, daemon=True).start()
+        threading.Thread(target=cmd_new, daemon=True).start()
 
-    elif text.startswith("/status"):
+    elif text.lower() in ("ستب", "stop", "وقف", "إيقاف", "ايقاف"):
         try:
             with sqlite3.connect(DB_PATH) as c:
-                total  = c.execute("SELECT COUNT(*) FROM seen").fetchone()[0]
-                chats  = c.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
-                recent = c.execute(
-                    "SELECT title, sent_at FROM seen ORDER BY sent_at DESC LIMIT 5"
-                ).fetchall()
-            lines = "\n".join(f"• {r[0][:45]}  <i>{r[1]}</i>" for r in recent)
-            tg_send(cid,
-                f"📊 <b>إحصائيات البوت</b>\n{'─' * 22}\n\n"
-                f"📚 ملخصات أُرسلت: <b>{total}</b>\n"
-                f"📣 قنوات: <b>{chats}</b>\n\n"
-                f"<b>آخر 5 ملخصات:</b>\n{lines or 'لا يوجد بعد'}")
+                active = c.execute(
+                    "SELECT id FROM novels WHERE status='summarizing'"
+                ).fetchone()
         except:
-            tg_send(cid, "⚠️ خطأ في قراءة الإحصائيات")
+            active = None
+        if active:
+            cmd_stop()
+            tg_send(cid, "⏹️ <b>جارٍ إيقاف التلخيص…</b>")
+        else:
+            tg_send(cid, "📭 لا يوجد تلخيص جارٍ حالياً.")
+
+    elif text in ("استمر", "تابع", "continue"):
+        ok = cmd_resume()
+        tg_send(cid, "▶️ <b>متابعة التلخيص…</b>" if ok
+                else "📭 لا توجد رواية موقوفة.")
+
+    elif text.startswith("/status"):
+        _send_status(cid)
+
+def _send_welcome(cid):
+    tg_send(cid,
+        "📚 <b>بوت ملخصات الروايات الكلاسيكية</b>\n"
+        f"{'━' * 26}\n\n"
+        "يختار روايةً كلاسيكية ويلخّص كل فصل فيها\n"
+        "تلخيصاً أدبياً احترافياً مفصّلاً بالعربية\n\n"
+        "📡 المصدر: Project Gutenberg\n"
+        f"🧠 الذكاء: {AI_MODELS[0]}\n\n"
+        "<b>الأوامر:</b>\n"
+        "📖 <b>جديد</b> — اختر رواية جديدة\n"
+        "⏹️ <b>ستب</b> — أوقف التلخيص\n"
+        "▶️ <b>استمر</b> — تابع رواية موقوفة\n"
+        "📊 <b>/status</b> — التقدم الحالي"
+    )
+
+def _send_status(cid):
+    try:
+        with sqlite3.connect(DB_PATH) as c:
+            row = c.execute(
+                "SELECT title_ar, title, total_chaps, status FROM novels "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            chats = c.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
+        if row:
+            ta, t, total, st = row
+            done = 0
+            with sqlite3.connect(DB_PATH) as c:
+                nid  = c.execute("SELECT id FROM novels ORDER BY id DESC LIMIT 1").fetchone()[0]
+                done = c.execute(
+                    "SELECT COUNT(*) FROM chapters WHERE novel_id=? AND status='sent'",
+                    (nid,),
+                ).fetchone()[0]
+            pct  = int(done / total * 100) if total else 0
+            bar  = "█" * (pct // 10) + "░" * (10 - pct // 10)
+            labels = {"summarizing": "🔄 جارٍ التلخيص", "complete": "✅ مكتمل",
+                      "stopped": "⏹️ موقوف", "ready": "⏳ جاهز", "preparing": "⚙️ تحضير"}
+            tg_send(cid,
+                f"📊 <b>التقدم</b>\n{'─' * 22}\n\n"
+                f"📖 {ta or t}\n"
+                f"[{bar}] <b>{pct}%</b>\n"
+                f"📑 {done}/{total} فصل\n"
+                f"📌 {labels.get(st, st)}\n"
+                f"📣 قنوات: {chats}"
+            )
+        else:
+            tg_send(cid, "📭 لا توجد رواية. أرسل <b>جديد</b> للبدء.")
+    except:
+        tg_send(cid, "⚠️ خطأ في قراءة الحالة.")
 
 # ─────────────────────────────────────────────────────
 # Self-Ping
@@ -549,11 +820,19 @@ app = Flask(__name__)
 def home():
     try:
         with sqlite3.connect(DB_PATH) as c:
-            total = c.execute("SELECT COUNT(*) FROM seen").fetchone()[0]
+            row   = c.execute(
+                "SELECT title_ar, title, total_chaps, status FROM novels ORDER BY id DESC LIMIT 1"
+            ).fetchone()
             chats = c.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
-        return f"📚 Summary Bot v1.0 | قنوات: {chats} | أُرسل: {total} ملخص"
+        if row:
+            ta, t, total, st = row
+            nid  = c.execute("SELECT id FROM novels ORDER BY id DESC LIMIT 1") if row else None
+            info = f"{ta or t} | {st}"
+        else:
+            info = "لا توجد رواية"
+        return f"📚 Novel Summary Bot v2.0 | قنوات: {chats} | {info}"
     except:
-        return "📚 Summary Bot v1.0"
+        return "📚 Novel Summary Bot v2.0"
 
 @app.route("/health")
 def health():
@@ -566,33 +845,58 @@ def add_ep(cid):
         "Content-Type": "application/json"
     }
 
-@app.route("/now")
-def now_ep():
-    threading.Thread(target=check_and_send, daemon=True).start()
-    return "🔄 جارٍ الجلب…", 200
+@app.route("/new")
+def new_ep():
+    threading.Thread(target=cmd_new, daemon=True).start()
+    return "🔄 جارٍ الاختيار…", 200
 
-@app.route("/reset")
-def reset_ep():
-    try:
-        with sqlite3.connect(DB_PATH) as c:
-            c.execute("DELETE FROM seen")
-        return json.dumps({"ok": True}), 200, {"Content-Type": "application/json"}
-    except Exception as ex:
-        return json.dumps({"error": str(ex)}), 500
+@app.route("/stop")
+def stop_ep():
+    cmd_stop()
+    return "⏹️ إشارة إيقاف", 200
 
 @app.route("/status")
 def status_ep():
     try:
         with sqlite3.connect(DB_PATH) as c:
-            total  = c.execute("SELECT COUNT(*) FROM seen").fetchone()[0]
-            chats  = c.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
-            recent = c.execute(
-                "SELECT title, sent_at FROM seen ORDER BY sent_at DESC LIMIT 10"
+            rows  = c.execute(
+                "SELECT id,title,title_ar,total_chaps,status FROM novels ORDER BY id DESC LIMIT 5"
             ).fetchall()
+            chats = c.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
+        result = []
+        for r in rows:
+            nid   = r[0]
+            done  = c.execute(
+                "SELECT COUNT(*) FROM chapters WHERE novel_id=? AND status='sent'",
+                (nid,),
+            ).fetchone()[0] if False else 0
+            with sqlite3.connect(DB_PATH) as c2:
+                done = c2.execute(
+                    "SELECT COUNT(*) FROM chapters WHERE novel_id=? AND status='sent'",
+                    (nid,),
+                ).fetchone()[0]
+            result.append({
+                "id": r[0], "title": r[1], "title_ar": r[2],
+                "total": r[3], "done": done,
+                "pct": int(done / r[3] * 100) if r[3] else 0,
+                "status": r[4],
+            })
         return json.dumps({
-            "version": "1.0", "channels": chats, "sent": total,
-            "recent": [{"title": r[0], "sent_at": r[1]} for r in recent],
+            "version": "2.0", "channels": chats,
+            "ai_model": AI_MODELS[0], "chapter_delay": CHAPTER_DELAY,
+            "novels": result,
         }, ensure_ascii=False, indent=2), 200, {"Content-Type": "application/json"}
+    except Exception as ex:
+        return json.dumps({"error": str(ex)}), 500
+
+@app.route("/reset")
+def reset_ep():
+    try:
+        cmd_stop()
+        with sqlite3.connect(DB_PATH) as c:
+            c.execute("DELETE FROM chapters")
+            c.execute("DELETE FROM novels")
+        return json.dumps({"ok": True}), 200, {"Content-Type": "application/json"}
     except Exception as ex:
         return json.dumps({"error": str(ex)}), 500
 
@@ -604,13 +908,12 @@ def _startup():
     init_db()
     if DEFAULT_CHAT:
         add_channel(DEFAULT_CHAT, "default")
-    threading.Thread(target=tg_poll,       daemon=True, name="poll").start()
-    threading.Thread(target=scheduler_loop, daemon=True, name="scheduler").start()
-    threading.Thread(target=self_ping,     daemon=True, name="ping").start()
-    engine = f"Llama {LLAMA_PRIMARY[:20]}" if (GITHUB_TOKEN and _OAI_OK) else "Google Translate"
+    threading.Thread(target=tg_poll,   daemon=True, name="poll").start()
+    threading.Thread(target=self_ping, daemon=True, name="ping").start()
+    model = AI_MODELS[0] if (GITHUB_TOKEN and _OAI_OK) else "Google Translate"
     logging.info(
-        f"🚀 Summary Bot v1.0 | {engine} | "
-        f"فحص كل {CHECK_EVERY//3600}h | booksummaryclub.com"
+        f"🚀 Novel Summary Bot v2.0 | نموذج: {model} | "
+        f"فصل كل {CHAPTER_DELAY}s"
     )
 
 threading.Thread(target=_startup, daemon=True, name="startup").start()

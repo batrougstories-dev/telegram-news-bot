@@ -1,5 +1,3 @@
 flask
 requests
-feedparser
-beautifulsoup4
 openai
